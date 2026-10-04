@@ -3,6 +3,17 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
+static void wifiEventLogger(arduino_event_id_t event, arduino_event_info_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+    Serial.println("[WIFI] STA connected to AP");
+  } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+    Serial.printf("[WIFI] GOT IP: %s\n", WiFi.localIP().toString().c_str());
+  } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    Serial.printf("[WIFI] STA disconnected, reason=%u\n",
+                  (unsigned)info.wifi_sta_disconnected.reason);
+  }
+}
+
 // iPhone HomeKit Television -> Honor X1 BLE HID bridge.
 // The TV should pair this ESP32-C3 as a normal BLE keyboard, so the original
 // HDRC-BV1 remote can remain paired independently.
@@ -170,6 +181,7 @@ struct HonorSpeaker : Service::TelevisionSpeaker {
 void setup() {
   Serial.begin(115200);
   delay(300);
+  WiFi.onEvent(wifiEventLogger);
 
   Serial.println();
   Serial.println("Honor X1 Apple Remote Bridge");
