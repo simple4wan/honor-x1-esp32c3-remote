@@ -44,20 +44,17 @@ static void configurePairingAdvertising() {
   advData.setFlags(0x05);
   advData.addServiceUUID(NimBLEUUID((uint16_t)0x1812));
   advData.setAppearance(0x03C1);
+  advData.setName("HDRC-BV1");
   advData.setManufacturerData(std::vector<uint8_t>(pairingMfg, pairingMfg + sizeof(pairingMfg)));
-
-  NimBLEAdvertisementData scanData;
-  scanData.setName("HDRC-BV1");
 
   adv->stop();
   adv->setAdvertisementData(advData);
-  adv->setScanResponseData(scanData);
-  adv->enableScanResponse(true);
+  adv->enableScanResponse(false);
   adv->setMinInterval(0x30);
   adv->setMaxInterval(0x60);
   adv->start();
 
-  Serial.println("[BLE] Pairing ADV started as HDRC-BV1-TEST");
+  Serial.println("[BLE] Pairing ADV started as HDRC-BV1");
 }
 
 static void configureWakeAdvertising() {
@@ -317,7 +314,7 @@ void setup() {
     ->addLink(speaker);
 
   Serial.println("[HK] HomeKit Television ready");
-  Serial.println("[BLE] Pair 'HDRC-BV1-TEST' from the TV Bluetooth settings");
+  Serial.println("[BLE] Pair 'HDRC-BV1' from the TV Bluetooth settings");
 }
 
 void loop() {
