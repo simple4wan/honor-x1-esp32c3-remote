@@ -23,6 +23,8 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          source /opt/esp/idf/export.sh
+          idf.py --version
           idf.py set-target esp32c3
           idf.py build
           idf.py merge-bin -o honor-x1-sniffer-esp32c3.factory.bin -f raw
