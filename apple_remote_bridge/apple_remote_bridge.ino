@@ -37,7 +37,8 @@ static void configureWakeAdvertising() {
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
 
   NimBLEAddress ownAddr = NimBLEDevice::getAddress();
-  const uint8_t *base = ownAddr.getBase();
+  const auto *baseAddr = ownAddr.getBase();
+  const uint8_t *base = baseAddr->val;
 
   std::vector<uint8_t> mfg = {
       0x02, 0x7D, 0x03, 0x00,
