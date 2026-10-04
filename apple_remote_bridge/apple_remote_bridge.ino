@@ -96,10 +96,18 @@ static void setupHonorBleKeyboard() {
 
   // Step 2 identity test: clone HDRC-BV1-TEST manufacturer data observed in advertising.
   // Original AD structure was: 05 FF 02 7D 04 00
-  static const uint8_t honorManufacturerData[] = {0x02, 0x7D, 0x04, 0x00};
-  adv->setManufacturerData(std::vector<uint8_t>(
-      honorManufacturerData,
-      honorManufacturerData + sizeof(honorManufacturerData)));
+  // Work-state manufacturer data captured from the original HDRC-BV1:
+  // 02 7D 03 00 + BLE MAC (6 bytes, canonical order) + 01 01
+  uint8_t mac[6];
+  NimBLEAddress ownAddr = NimBLEDevice::getAddress();
+  memcpy(mac, ownAddr.getBase(), 6);
+
+  std::vector<uint8_t> honorManufacturerData = {
+      0x02, 0x7D, 0x03, 0x00,
+      mac[5], mac[4], mac[3], mac[2], mac[1], mac[0],
+      0x01, 0x01
+  };
+  adv->setManufacturerData(honorManufacturerData);
   adv->enableScanResponse(true);
   adv->start();
 
