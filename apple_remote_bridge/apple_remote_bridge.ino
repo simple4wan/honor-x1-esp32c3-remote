@@ -33,85 +33,9 @@ static const uint8_t reportMap[] = {
   0x05,0x00,0x09,0x00,0xA1,0x01,0x85,0x5A,0x95,0xFF,0x75,0x08,0x15,0x00,0x25,0xFF,0x19,0x00,0x29,0xFF,0x81,0x00,0xC0,0xC0
 };
 
-class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo) override {
-    bleConnected = true;
-    Serial.printf("[BLE] TV connected: %s\n", connInfo.getAddress().toString().c_str());
-  }
-
-  void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
-    bleConnected = false;
-    Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
-    NimBLEDevice::getAdvertising()->start();
-  }
-};
-
-static void sendHonorKey(uint8_t key) {
-  if (!bleConnected || !inputReport) {
-    Serial.printf("[BLE] Not connected; key 0x%02X ignored\n", key);
-    return;
-  }
-
-  uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
-  uint8_t release[8] = {0};
-
-  inputReport->setValue(press, sizeof(press));
-  inputReport->notify();
-  delay(90);
-
-  inputReport->setValue(release, sizeof(release));
-  inputReport->notify();
-
-  Serial.printf("[BLE] Sent Honor key 0x%02X\n", key);
-}
-
-static void setupHonorBleKeyboard() {
-  NimBLEDevice::init("HDRC-BV1-TEST");
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-
-  // Bonding + Secure Connections, no MITM/passkey UI.
-  NimBLEDevice::setSecurityAuth(true, false, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-
-  NimBLEServer *server = NimBLEDevice::createServer();
-  server->setCallbacks(new ServerCallbacks());
-
-  hidDevice = new NimBLEHIDDevice(server);
-  inputReport = hidDevice->getInputReport(1);
-  inputReport5A = hidDevice->getInputReport(0x5A);
-  outputReport5A = hidDevice->getOutputReport(0x5A);
-  inputReport2 = hidDevice->getInputReport(2);
-  hidDevice->setManufacturer("ESP32 Honor Bridge");
-  hidDevice->setPnp(0x02, 0x05AC, 0x0220, 0x0100);
-  hidDevice->setHidInfo(0x00, 0x02);
-  hidDevice->setReportMap((uint8_t*)reportMap, sizeof(reportMap));
-  hidDevice->setBatteryLevel(100);
-
-  server->start();
-
-  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->setName("HDRC-BV1-TEST");
-  adv->addServiceUUID(hidDevice->getHidService()->getUUID());
-  adv->setAppearance(HID_KEYBOARD);
-
-  // Step 2 identity test: clone HDRC-BV1-TEST manufacturer data observed in advertising.
-  // Original AD structure was: 05 FF 02 7D 04 00
-  // Work-state manufacturer data captured from the original HDRC-BV1:
-  // 02 7D 03 00 + BLE MAC (6 bytes, canonical order) + 01 01
-  uint8_t mac[6];
-  NimBLEAddress ownAddr = NimBLEDevice::getAddress();
-  memcpy(mac, ownAddr.getBase(), 6);
-
-  std::vector<uint8_t> honorManufacturerData = {
-      0x02, 0x7D, 0x03, 0x00,
-      mac[5], mac[4], mac[3], mac[2], mac[1], mac[0],
-      0x01, 0x01
-  };
-  adv->setManufacturerData(honorManufacturerData);
-  adv->enableScanResponse(true);
-  adv->start();
-
-  Serial.println("[BLE] Advertising as 'HDRC-BV1-TEST' HID keyboard");
+static void configureWakeAdvertising() {
+  configureWakeAdvertising();
+  Serial.println("[BLE] Advertising with HDRC-BV1 wake packet");
 }
 
 // Values captured from the original HDRC-BV1-TEST.
@@ -145,8 +69,13 @@ struct HonorTelevision : Service::Television {
   boolean update() override {
     if (active->updated()) {
       Serial.printf("[HK] Power requested: %s\n", active->getNewVal() ? "ON" : "OFF");
-      // Honor remote uses the same toggle Power key for on/off.
-      sendHonorKey(HONOR_POWER);
+      if (active->getNewVal() && !bleConnected) {
+        Serial.println("[HK] TV appears disconnected; refreshing wake advertisement");
+        configureWakeAdvertising();
+      } else {
+        // While connected, the original remote sends HID Power 0x66.
+        sendHonorKey(HONOR_POWER);
+      }
     }
 
     if (remoteKey->updated()) {
