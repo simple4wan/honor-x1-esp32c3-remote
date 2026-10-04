@@ -28,11 +28,10 @@ static int gap_event(struct ble_gap_event *event, void *arg){
     bool name_match = f.name && f.name_len==9 && memcmp(f.name,"HDRC-BV1",9)==0;
     if(!name_match) return 0;
 
-    char addr[BLE_ADDR_STR_LEN];
-    ble_addr_to_str(&event->disc.addr,addr);
-
-    printf("\nADV addr=%s type=%u rssi=%d len=%u\n",
-           addr,event->disc.addr.type,event->disc.rssi,event->disc.length_data);
+    const uint8_t *a = event->disc.addr.val;
+    printf("\nADV addr=%02X:%02X:%02X:%02X:%02X:%02X type=%u rssi=%d len=%u\n",
+           a[5],a[4],a[3],a[2],a[1],a[0],
+           event->disc.addr.type,event->disc.rssi,event->disc.length_data);
     printf("RAW=");
     print_hex(event->disc.data,event->disc.length_data);
 
