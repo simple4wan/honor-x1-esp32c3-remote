@@ -43,7 +43,6 @@ static int gap_event(struct ble_gap_event *event, void *arg){
         }
     }
 
-    if(!name_match && !mfg_match && !hid_match) return 0;
 
     const uint8_t *a = event->disc.addr.val;
     printf("\nADV addr=%02X:%02X:%02X:%02X:%02X:%02X type=%u rssi=%d len=%u\n",
@@ -70,7 +69,7 @@ static void start_scan(void){
     p.filter_duplicates=0;
     int rc=ble_gap_disc(own_addr_type,BLE_HS_FOREVER,&p,gap_event,NULL);
     if(rc) ESP_LOGE(TAG,"scan start rc=%d",rc);
-    else ESP_LOGI(TAG,"Scanning HDRC-BV1 continuously. Turn TV off, then press original remote POWER.");
+    else ESP_LOGI(TAG,"Scanning ALL BLE advertisements. Turn TV off, then press original remote POWER and look for new/changed packets.");
 }
 
 static void on_sync(void){
