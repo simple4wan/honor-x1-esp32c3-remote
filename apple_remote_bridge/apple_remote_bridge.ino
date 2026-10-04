@@ -97,6 +97,13 @@ static void setupHonorBleKeyboard() {
   adv->setName("HDRC-BV1");
   adv->addServiceUUID(hidDevice->getHidService()->getUUID());
   adv->setAppearance(HID_KEYBOARD);
+
+  // Step 2 identity test: clone HDRC-BV1 manufacturer data observed in advertising.
+  // Original AD structure was: 05 FF 02 7D 04 00
+  static const uint8_t honorManufacturerData[] = {0x02, 0x7D, 0x04, 0x00};
+  adv->setManufacturerData(std::vector<uint8_t>(
+      honorManufacturerData,
+      honorManufacturerData + sizeof(honorManufacturerData)));
   adv->enableScanResponse(true);
   adv->start();
 
