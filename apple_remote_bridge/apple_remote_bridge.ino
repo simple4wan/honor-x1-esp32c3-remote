@@ -192,6 +192,9 @@ void setup() {
   setupHonorBleKeyboard();
 
   homeSpan.setLogLevel(1);
+  // Give ESP32-C3 enough time to associate and complete DHCP before retrying.
+  // HomeSpan Setup AP otherwise retries WiFi.begin() too aggressively on some APs.
+  homeSpan.setConnectionTimes(15, 60, 3);
   homeSpan.enableAutoStartAP();
   homeSpan.begin(Category::Television, "Honor X1");
 
