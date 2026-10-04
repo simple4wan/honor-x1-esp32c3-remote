@@ -192,6 +192,7 @@ void setup() {
   setupHonorBleKeyboard();
 
   homeSpan.setLogLevel(1);
+  homeSpan.enableAutoStartAP();
   homeSpan.begin(Category::Television, "Honor X1");
 
   SPAN_ACCESSORY();
