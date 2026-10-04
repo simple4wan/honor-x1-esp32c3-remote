@@ -26,7 +26,7 @@ jobs:
       - name: Compile ESP32-C3
         run: |
           mkdir -p build artifacts
-          ./bin/arduino-cli compile             --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs"             --output-dir build             apple_remote_bridge
+          ./bin/arduino-cli compile             --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs,CDCOnBoot=cdc"             --output-dir build             apple_remote_bridge
 
           echo "Build output:"
           find build -maxdepth 1 -type f -printf '%f\n' | sort
