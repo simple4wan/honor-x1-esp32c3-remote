@@ -348,7 +348,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGI(TAG, "Encryption change status=%d", event->enc_change.status);
         return 0;
 
-    case BLE_GAP_EVENT_PASSKEY:
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
         ESP_LOGI(TAG, "Pairing action=%d", event->passkey.params.action);
         if (event->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
             struct ble_sm_io pkey = {0};
