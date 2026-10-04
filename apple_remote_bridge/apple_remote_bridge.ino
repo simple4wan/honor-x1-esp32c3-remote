@@ -115,6 +115,7 @@ enum HonorKey : uint8_t {
   HONOR_POWER      = 0x66,
   HONOR_VOICE      = 0x75,
   HONOR_MENU       = 0x76,
+  HONOR_MUTE       = 0x7F,
   HONOR_VOLUME_UP  = 0x80,
   HONOR_VOLUME_DOWN= 0x81
 };
@@ -161,10 +162,12 @@ struct HonorTelevision : Service::Television {
 
 struct HonorSpeaker : Service::TelevisionSpeaker {
   SpanCharacteristic *volumeSelector;
+  SpanCharacteristic *mute;
 
   HonorSpeaker() : Service::TelevisionSpeaker() {
     new Characteristic::VolumeControlType(3);
     volumeSelector = new Characteristic::VolumeSelector();
+    mute = new Characteristic::Mute(0);
   }
 
   boolean update() override {
@@ -173,6 +176,12 @@ struct HonorSpeaker : Service::TelevisionSpeaker {
       int v = volumeSelector->getNewVal();
       Serial.printf("[HK] VolumeSelector=%d\n", v);
       sendHonorKey(v == 0 ? HONOR_VOLUME_UP : HONOR_VOLUME_DOWN);
+    }
+
+    if (mute->updated()) {
+      Serial.printf("[HK] Mute=%d\n", mute->getNewVal());
+      // HID Keyboard/Keypad usage 0x7F = Mute. Honor X1 acceptance is being tested.
+      sendHonorKey(HONOR_MUTE);
     }
     return true;
   }
