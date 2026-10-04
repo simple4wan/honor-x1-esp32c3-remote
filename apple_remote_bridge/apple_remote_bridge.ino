@@ -199,6 +199,13 @@ void setup() {
 
   Serial.println("[HK] HomeKit Television ready");
   Serial.println("[BLE] Pair 'Honor Remote Bridge' from the TV Bluetooth settings");
+
+  // If Wi-Fi credentials are absent, automatically launch the HomeSpan setup AP.
+  // This avoids needing an interactive serial terminal just to type the HomeSpan \"A\" command.
+  if (WiFi.SSID().length() == 0) {
+    Serial.println("[HK] No Wi-Fi credentials found; launching HomeSpan Setup AP...");
+    homeSpan.processSerialCommand("A");
+  }
 }
 
 void loop() {
