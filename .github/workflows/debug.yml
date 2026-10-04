@@ -1,0 +1,49 @@
+name: Build Honor X1 Debug Firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "debug/**"
+      - ".github/workflows/debug.yml"
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.5
+
+    strategy:
+      matrix:
+        target:
+          - name: wake-scan
+            dir: debug/wake_scan
+          - name: hid-sniffer
+            dir: debug/hid_sniffer
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/esp/idf/export.sh
+          cd "${{ matrix.target.dir }}"
+          idf.py set-target esp32c3
+          idf.py build
+          idf.py merge-bin -o "${{ matrix.target.name }}.factory.bin" -f raw
+          mkdir -p artifacts
+          cp "${{ matrix.target.name }}.factory.bin" artifacts/
+          cp build/*.bin artifacts/ || true
+          cp build/bootloader/bootloader.bin artifacts/ || true
+          cp build/partition_table/partition-table.bin artifacts/ || true
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: honor-x1-${{ matrix.target.name }}
+          path: ${{ matrix.target.dir }}/artifacts/
+          if-no-files-found: error
