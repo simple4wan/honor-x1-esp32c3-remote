@@ -73,7 +73,7 @@ static void sendHonorKey(uint8_t key) {
 }
 
 static void setupHonorBleKeyboard() {
-  NimBLEDevice::init("Honor Remote Bridge");
+  NimBLEDevice::init("HDRC-BV1");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
   // Bonding + Secure Connections, no MITM/passkey UI.
@@ -94,13 +94,13 @@ static void setupHonorBleKeyboard() {
   server->start();
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->setName("Honor Remote Bridge");
+  adv->setName("HDRC-BV1");
   adv->addServiceUUID(hidDevice->getHidService()->getUUID());
   adv->setAppearance(HID_KEYBOARD);
   adv->enableScanResponse(true);
   adv->start();
 
-  Serial.println("[BLE] Advertising as 'Honor Remote Bridge' HID keyboard");
+  Serial.println("[BLE] Advertising as 'HDRC-BV1' HID keyboard");
 }
 
 // Values captured from the original HDRC-BV1.
@@ -214,7 +214,7 @@ void setup() {
     ->addLink(speaker);
 
   Serial.println("[HK] HomeKit Television ready");
-  Serial.println("[BLE] Pair 'Honor Remote Bridge' from the TV Bluetooth settings");
+  Serial.println("[BLE] Pair 'HDRC-BV1' from the TV Bluetooth settings");
 }
 
 void loop() {
