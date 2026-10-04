@@ -36,7 +36,7 @@ jobs:
           idf.py build
           idf.py merge-bin -o "${{ matrix.target.name }}.factory.bin" -f raw
           mkdir -p artifacts
-          cp "${{ matrix.target.name }}.factory.bin" artifacts/
+          cp "build/${{ matrix.target.name }}.factory.bin" artifacts/
           cp build/*.bin artifacts/ || true
           cp build/bootloader/bootloader.bin artifacts/ || true
           cp build/partition_table/partition-table.bin artifacts/ || true
