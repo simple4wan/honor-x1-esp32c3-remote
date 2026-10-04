@@ -34,8 +34,92 @@ static const uint8_t reportMap[] = {
 };
 
 static void configureWakeAdvertising() {
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+
+  NimBLEAddress ownAddr = NimBLEDevice::getAddress();
+  const uint8_t *base = ownAddr.getBase();
+
+  std::vector<uint8_t> mfg = {
+      0x02, 0x7D, 0x03, 0x00,
+      base[5], base[4], base[3], base[2], base[1], base[0],
+      0x01, 0x01
+  };
+
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x04);
+  advData.addServiceUUID(NimBLEUUID((uint16_t)0x1812));
+  advData.setAppearance(0x03C1);
+  advData.setManufacturerData(mfg);
+
+  adv->stop();
+  adv->setAdvertisementData(advData);
+  adv->enableScanResponse(false);
+  adv->setMinInterval(0x20);
+  adv->setMaxInterval(0x30);
+  adv->start();
+
+  Serial.printf("[BLE] Wake ADV identity: %s\n", ownAddr.toString().c_str());
+  Serial.print("[BLE] Wake ADV MFG=02 7D 03 00 ");
+  for (int i = 5; i >= 0; --i) Serial.printf("%02X ", base[i]);
+  Serial.println("01 01");
+}
+
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo) override {
+    bleConnected = true;
+    Serial.printf("[BLE] TV connected: %s\n", connInfo.getAddress().toString().c_str());
+  }
+
+  void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
+    bleConnected = false;
+    Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
+    configureWakeAdvertising();
+  }
+};
+
+static void sendHonorKey(uint8_t key) {
+  if (!bleConnected || !inputReport) {
+    Serial.printf("[BLE] Not connected; key 0x%02X ignored\n", key);
+    return;
+  }
+
+  uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
+  uint8_t release[8] = {0};
+
+  inputReport->setValue(press, sizeof(press));
+  inputReport->notify();
+  delay(90);
+
+  inputReport->setValue(release, sizeof(release));
+  inputReport->notify();
+
+  Serial.printf("[BLE] Sent Honor key 0x%02X\n", key);
+}
+
+static void setupHonorBleKeyboard() {
+  NimBLEDevice::init("HDRC-BV1-TEST");
+  NimBLEDevice::setPower(9);
+
+  NimBLEDevice::setSecurityAuth(true, false, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+  NimBLEServer *server = NimBLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
+
+  hidDevice = new NimBLEHIDDevice(server);
+  inputReport = hidDevice->getInputReport(1);
+  inputReport5A = hidDevice->getInputReport(0x5A);
+  outputReport5A = hidDevice->getOutputReport(0x5A);
+  inputReport2 = hidDevice->getInputReport(2);
+
+  hidDevice->setManufacturer("ESP32 Honor Bridge");
+  hidDevice->setPnp(0x02, 0x05AC, 0x0220, 0x0100);
+  hidDevice->setHidInfo(0x00, 0x02);
+  hidDevice->setReportMap((uint8_t*)reportMap, sizeof(reportMap));
+  hidDevice->setBatteryLevel(100);
+
+  server->start();
   configureWakeAdvertising();
-  Serial.println("[BLE] Advertising with HDRC-BV1 wake packet");
 }
 
 // Values captured from the original HDRC-BV1-TEST.
@@ -70,10 +154,9 @@ struct HonorTelevision : Service::Television {
     if (active->updated()) {
       Serial.printf("[HK] Power requested: %s\n", active->getNewVal() ? "ON" : "OFF");
       if (active->getNewVal() && !bleConnected) {
-        Serial.println("[HK] TV appears disconnected; refreshing wake advertisement");
+        Serial.println("[HK] ON while BLE disconnected -> replay wake advertisement");
         configureWakeAdvertising();
       } else {
-        // While connected, the original remote sends HID Power 0x66.
         sendHonorKey(HONOR_POWER);
       }
     }
