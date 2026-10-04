@@ -3,6 +3,8 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
+extern "C" void ble_hs_id_set_pub(const uint8_t *pub_addr);
+
 static void wifiEventLogger(arduino_event_id_t event, arduino_event_info_t info) {
   if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
     Serial.println("[WIFI] STA connected to AP");
@@ -45,7 +47,7 @@ static void configurePairingAdvertising() {
   advData.setManufacturerData(std::vector<uint8_t>(pairingMfg, pairingMfg + sizeof(pairingMfg)));
 
   NimBLEAdvertisementData scanData;
-  scanData.setName("HDRC-BV1-TEST");
+  scanData.setName("HDRC-BV1");
 
   adv->stop();
   adv->setAdvertisementData(advData);
@@ -120,8 +122,19 @@ static void sendHonorKey(uint8_t key) {
 }
 
 static void setupHonorBleKeyboard() {
-  NimBLEDevice::init("HDRC-BV1-TEST");
+  NimBLEDevice::init("HDRC-BV1");
   NimBLEDevice::setPower(9);
+
+  // Test mode: clone the original HDRC-BV1 public BLE identity.
+  // ble_hs uses controller byte order (LSB first).
+  static const uint8_t originalRemotePubAddr[6] = {
+      0x45, 0xB8, 0x76, 0x3B, 0x70, 0x18
+  };
+  ble_hs_id_set_pub(originalRemotePubAddr);
+  NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC);
+
+  Serial.printf("[BLE] Cloned public identity: %s\n",
+                NimBLEDevice::getAddress().toString().c_str());
 
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
