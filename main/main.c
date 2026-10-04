@@ -42,6 +42,7 @@ static void discover_hid(void);
 static void discover_hid_chrs(void);
 static void discover_next_report_dscs(void);
 static void configure_next_report(void);
+static int write_cccd_cb(uint16_t ch, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg);
 
 static void print_mbuf(const struct os_mbuf *om)
 {
