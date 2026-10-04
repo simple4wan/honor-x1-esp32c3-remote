@@ -138,8 +138,31 @@ static void setupHonorBleKeyboard() {
   outputReport5A = hidDevice->getOutputReport(0x5A);
   inputReport2 = hidDevice->getInputReport(2);
 
-  hidDevice->setManufacturer("ESP32 Honor Bridge");
-  hidDevice->setPnp(0x02, 0x05AC, 0x0220, 0x0100);
+  hidDevice->setManufacturer("Realtek BT");
+  hidDevice->setPnp(0x01, 0x7D02, 0x0002, 0x0003);
+
+  // Clone original HDRC-BV1 Device Information characteristics.
+  NimBLEService *deviceInfo = hidDevice->getDeviceInfoService();
+
+  NimBLECharacteristic *modelChr =
+      deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2A24), NIMBLE_PROPERTY::READ);
+  modelChr->setValue("Model Nbr 0.9");
+
+  NimBLECharacteristic *serialChr =
+      deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2A25), NIMBLE_PROPERTY::READ);
+  serialChr->setValue("RTKBeeSerialNum");
+
+  NimBLECharacteristic *firmwareChr =
+      deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2A26), NIMBLE_PROPERTY::READ);
+  firmwareChr->setValue("RTKBeeFirmwareRev");
+
+  NimBLECharacteristic *hardwareChr =
+      deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2A27), NIMBLE_PROPERTY::READ);
+  hardwareChr->setValue("RTKBeeHardwareRev");
+
+  NimBLECharacteristic *softwareChr =
+      deviceInfo->createCharacteristic(NimBLEUUID((uint16_t)0x2A28), NIMBLE_PROPERTY::READ);
+  softwareChr->setValue("RTKBeeSoftwareRev");
   hidDevice->setHidInfo(0x00, 0x02);
   hidDevice->setReportMap((uint8_t*)reportMap, sizeof(reportMap));
   hidDevice->setBatteryLevel(100);
