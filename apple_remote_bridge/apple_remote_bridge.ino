@@ -33,6 +33,31 @@ static const uint8_t reportMap[] = {
   0x05,0x00,0x09,0x00,0xA1,0x01,0x85,0x5A,0x95,0xFF,0x75,0x08,0x15,0x00,0x25,0xFF,0x19,0x00,0x29,0xFF,0x81,0x00,0xC0,0xC0
 };
 
+static void configurePairingAdvertising() {
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+
+  static const uint8_t pairingMfg[] = {0x02, 0x7D, 0x04, 0x00};
+
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x05);
+  advData.addServiceUUID(NimBLEUUID((uint16_t)0x1812));
+  advData.setAppearance(0x03C1);
+  advData.setManufacturerData(std::vector<uint8_t>(pairingMfg, pairingMfg + sizeof(pairingMfg)));
+
+  NimBLEAdvertisementData scanData;
+  scanData.setName("HDRC-BV1-TEST");
+
+  adv->stop();
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanData);
+  adv->enableScanResponse(true);
+  adv->setMinInterval(0x30);
+  adv->setMaxInterval(0x60);
+  adv->start();
+
+  Serial.println("[BLE] Pairing ADV started as HDRC-BV1-TEST");
+}
+
 static void configureWakeAdvertising() {
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
 
@@ -74,7 +99,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
     bleConnected = false;
     Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
-    configureWakeAdvertising();
+    configurePairingAdvertising();
   }
 };
 
@@ -120,7 +145,7 @@ static void setupHonorBleKeyboard() {
   hidDevice->setBatteryLevel(100);
 
   server->start();
-  configureWakeAdvertising();
+  configurePairingAdvertising();
 }
 
 // Values captured from the original HDRC-BV1-TEST.
