@@ -90,6 +90,17 @@ static int read_report_ref_cb(uint16_t ch, const struct ble_gatt_error *error,
                  r->val_handle, error->status);
     }
 
+    if (r->cccd_handle) {
+        uint16_t notify = htole16(0x0001);
+        int rc = ble_gattc_write_flat(conn_handle, r->cccd_handle,
+                                      &notify, sizeof(notify),
+                                      write_cccd_cb, r);
+        if (rc == 0) {
+            return 0;
+        }
+        ESP_LOGW(TAG, "Could not start CCCD write rc=%d", rc);
+    }
+
     configure_next_report();
     return 0;
 }
