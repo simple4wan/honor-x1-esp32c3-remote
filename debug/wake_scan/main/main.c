@@ -26,7 +26,24 @@ static int gap_event(struct ble_gap_event *event, void *arg){
     ble_hs_adv_parse_fields(&f,event->disc.data,event->disc.length_data);
 
     bool name_match = f.name && f.name_len==9 && memcmp(f.name,"HDRC-BV1",9)==0;
-    if(!name_match) return 0;
+
+    bool mfg_match = false;
+    if(f.mfg_data && f.mfg_data_len >= 4){
+        mfg_match = f.mfg_data[0]==0x02 &&
+                    f.mfg_data[1]==0x7D &&
+                    f.mfg_data[2]==0x04 &&
+                    f.mfg_data[3]==0x00;
+    }
+
+    bool hid_match = false;
+    for(int i=0;i<f.num_uuids16;i++){
+        if(ble_uuid_u16(&f.uuids16[i].u)==0x1812){
+            hid_match = true;
+            break;
+        }
+    }
+
+    if(!name_match && !mfg_match && !hid_match) return 0;
 
     const uint8_t *a = event->disc.addr.val;
     printf("\nADV addr=%02X:%02X:%02X:%02X:%02X:%02X type=%u rssi=%d len=%u\n",
@@ -42,6 +59,8 @@ static int gap_event(struct ble_gap_event *event, void *arg){
     if(f.name && f.name_len){
         printf("NAME=%.*s\n",f.name_len,f.name);
     }
+    printf("MATCH name=%d hid1812=%d mfg=%d\n",
+           name_match,hid_match,mfg_match);
     return 0;
 }
 
