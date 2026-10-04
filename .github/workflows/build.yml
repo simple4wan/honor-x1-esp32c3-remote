@@ -22,6 +22,34 @@ jobs:
           ./bin/arduino-cli core install esp32:esp32@3.3.8 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           ./bin/arduino-cli lib install "HomeSpan@2.1.8"
           ./bin/arduino-cli lib install "NimBLE-Arduino@2.5.0"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path.home() / "Arduino/libraries/HomeSpan/src/Span.h"
+          s = p.read_text()
+          old = """  CREATE_SERV(TelevisionSpeaker,113)
+    REQ(VolumeControlType);
+    REQ(VolumeSelector);      
+    OPT(ConfiguredName);"""
+          new = """  CREATE_SERV(TelevisionSpeaker,113)
+    REQ(VolumeControlType);
+    REQ(VolumeSelector);
+    OPT(Mute);
+    OPT(ConfiguredName);"""
+          if old not in s:
+              # Match HomeSpan 2.1.8 including its descriptive comment.
+              old = """  CREATE_SERV(TelevisionSpeaker,113)    // Defines a Television Speaker that can be controlled via the Remote Control widget on an iPhone.  Use only as a Linked Service for the <b>Television</b> Service.
+    REQ(VolumeControlType);
+    REQ(VolumeSelector);      
+    OPT(ConfiguredName);"""
+              new = """  CREATE_SERV(TelevisionSpeaker,113)    // Defines a Television Speaker that can be controlled via the Remote Control widget on an iPhone.  Use only as a Linked Service for the <b>Television</b> Service.
+    REQ(VolumeControlType);
+    REQ(VolumeSelector);
+    OPT(Mute);
+    OPT(ConfiguredName);"""
+          if old not in s:
+              raise SystemExit("HomeSpan TelevisionSpeaker block not found")
+          p.write_text(s.replace(old, new))
+          PY
 
       - name: Compile ESP32-C3
         run: |
