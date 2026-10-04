@@ -3,8 +3,6 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
-extern "C" void ble_hs_id_set_pub(const uint8_t *pub_addr);
-
 static void wifiEventLogger(arduino_event_id_t event, arduino_event_info_t info) {
   if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
     Serial.println("[WIFI] STA connected to AP");
@@ -44,17 +42,20 @@ static void configurePairingAdvertising() {
   advData.setFlags(0x05);
   advData.addServiceUUID(NimBLEUUID((uint16_t)0x1812));
   advData.setAppearance(0x03C1);
-  advData.setName("HDRC-BV1");
   advData.setManufacturerData(std::vector<uint8_t>(pairingMfg, pairingMfg + sizeof(pairingMfg)));
+
+  NimBLEAdvertisementData scanData;
+  scanData.setName("HDRC-BV1-TEST");
 
   adv->stop();
   adv->setAdvertisementData(advData);
-  adv->enableScanResponse(false);
+  adv->setScanResponseData(scanData);
+  adv->enableScanResponse(true);
   adv->setMinInterval(0x30);
   adv->setMaxInterval(0x60);
   adv->start();
 
-  Serial.println("[BLE] Pairing ADV started as HDRC-BV1");
+  Serial.println("[BLE] Pairing ADV started as HDRC-BV1-TEST");
 }
 
 static void configureWakeAdvertising() {
@@ -119,19 +120,8 @@ static void sendHonorKey(uint8_t key) {
 }
 
 static void setupHonorBleKeyboard() {
-  NimBLEDevice::init("HDRC-BV1");
+  NimBLEDevice::init("HDRC-BV1-TEST");
   NimBLEDevice::setPower(9);
-
-  // Test mode: clone the original HDRC-BV1 public BLE identity.
-  // ble_hs uses controller byte order (LSB first).
-  static const uint8_t originalRemotePubAddr[6] = {
-      0x45, 0xB8, 0x76, 0x3B, 0x70, 0x18
-  };
-  ble_hs_id_set_pub(originalRemotePubAddr);
-  NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC);
-
-  Serial.printf("[BLE] Cloned public identity: %s\n",
-                NimBLEDevice::getAddress().toString().c_str());
 
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
@@ -314,7 +304,7 @@ void setup() {
     ->addLink(speaker);
 
   Serial.println("[HK] HomeKit Television ready");
-  Serial.println("[BLE] Pair 'HDRC-BV1' from the TV Bluetooth settings");
+  Serial.println("[BLE] Pair 'HDRC-BV1-TEST' from the TV Bluetooth settings");
 }
 
 void loop() {
