@@ -111,7 +111,7 @@ static void read_next_identity(void)
         ESP_LOGW(TAG, "Could not start identity read %s rc=%d", c->name, rc);
     }
     ESP_LOGI(TAG, "=== END DEVICE IDENTITY ===");
-    discover_identity();
+    discover_hid();
 }
 
 static int dis_chr_cb(uint16_t ch, const struct ble_gatt_error *error,
@@ -422,7 +422,7 @@ static int mtu_cb(uint16_t ch, const struct ble_gatt_error *error,
                   uint16_t mtu, void *arg)
 {
     ESP_LOGI(TAG, "MTU exchange status=%d mtu=%u", error->status, mtu);
-    discover_hid();
+    discover_identity();
     return 0;
 }
 
