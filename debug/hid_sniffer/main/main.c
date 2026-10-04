@@ -22,6 +22,24 @@ static uint16_t hid_start = 0;
 static uint16_t hid_end = 0;
 static uint16_t report_map_handle = 0;
 
+static uint16_t dis_start = 0;
+static uint16_t dis_end = 0;
+struct identity_chr {
+    uint16_t uuid;
+    uint16_t handle;
+    const char *name;
+};
+static struct identity_chr identity_chrs[] = {
+    {0x2A29, 0, "Manufacturer Name"},
+    {0x2A24, 0, "Model Number"},
+    {0x2A25, 0, "Serial Number"},
+    {0x2A26, 0, "Firmware Revision"},
+    {0x2A27, 0, "Hardware Revision"},
+    {0x2A28, 0, "Software Revision"},
+    {0x2A50, 0, "PnP ID"},
+};
+static int identity_read_index = 0;
+
 #define MAX_REPORTS 8
 struct report_info {
     uint16_t def_handle;
@@ -39,6 +57,8 @@ static int report_index = 0;
 static int gap_event(struct ble_gap_event *event, void *arg);
 static void start_scan(void);
 static void discover_hid(void);
+static void discover_identity(void);
+static void read_next_identity(void);
 static void discover_hid_chrs(void);
 static void discover_next_report_dscs(void);
 static void configure_next_report(void);
@@ -54,6 +74,114 @@ static void print_mbuf(const struct os_mbuf *om)
         om = SLIST_NEXT(om, om_next);
     }
     printf("\n");
+}
+
+static int read_identity_cb(uint16_t ch, const struct ble_gatt_error *error,
+                            struct ble_gatt_attr *attr, void *arg)
+{
+    struct identity_chr *c = (struct identity_chr *)arg;
+    if (error->status == 0 && attr && attr->om) {
+        printf("\nIDENTITY %s (0x%04X) = ", c->name, c->uuid);
+        if (c->uuid == 0x2A50) {
+            print_mbuf(attr->om);
+        } else {
+            int len = OS_MBUF_PKTLEN(attr->om);
+            uint8_t buf[128] = {0};
+            int copy = len < (int)sizeof(buf)-1 ? len : (int)sizeof(buf)-1;
+            if (ble_hs_mbuf_to_flat(attr->om, buf, copy, NULL) == 0) {
+                printf("%.*s\n", copy, (char *)buf);
+            } else {
+                print_mbuf(attr->om);
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "Identity read failed %s status=%d", c->name, error->status);
+    }
+    read_next_identity();
+    return 0;
+}
+
+static void read_next_identity(void)
+{
+    while (identity_read_index < (int)(sizeof(identity_chrs)/sizeof(identity_chrs[0]))) {
+        struct identity_chr *c = &identity_chrs[identity_read_index++];
+        if (!c->handle) continue;
+        int rc = ble_gattc_read(conn_handle, c->handle, read_identity_cb, c);
+        if (rc == 0) return;
+        ESP_LOGW(TAG, "Could not start identity read %s rc=%d", c->name, rc);
+    }
+    ESP_LOGI(TAG, "=== END DEVICE IDENTITY ===");
+    discover_identity();
+}
+
+static int dis_chr_cb(uint16_t ch, const struct ble_gatt_error *error,
+                      const struct ble_gatt_chr *chr, void *arg)
+{
+    if (error->status == 0 && chr) {
+        uint16_t uuid16 = ble_uuid_u16(&chr->uuid.u);
+        for (int i = 0; i < (int)(sizeof(identity_chrs)/sizeof(identity_chrs[0])); i++) {
+            if (identity_chrs[i].uuid == uuid16) {
+                identity_chrs[i].handle = chr->val_handle;
+                ESP_LOGI(TAG, "Identity characteristic %s uuid=0x%04X handle=0x%04X",
+                         identity_chrs[i].name, uuid16, chr->val_handle);
+            }
+        }
+        return 0;
+    }
+
+    if (error->status == BLE_HS_EDONE) {
+        identity_read_index = 0;
+        ESP_LOGI(TAG, "=== DEVICE IDENTITY ===");
+        read_next_identity();
+        return 0;
+    }
+
+    ESP_LOGW(TAG, "Device Information characteristic discovery status=%d", error->status);
+    discover_hid();
+    return 0;
+}
+
+static int dis_svc_cb(uint16_t ch, const struct ble_gatt_error *error,
+                      const struct ble_gatt_svc *svc, void *arg)
+{
+    if (error->status == 0 && svc) {
+        dis_start = svc->start_handle;
+        dis_end = svc->end_handle;
+        ESP_LOGI(TAG, "Device Information service found start=0x%04X end=0x%04X",
+                 dis_start, dis_end);
+        for (int i = 0; i < (int)(sizeof(identity_chrs)/sizeof(identity_chrs[0])); i++) {
+            identity_chrs[i].handle = 0;
+        }
+        int rc = ble_gattc_disc_all_chrs(conn_handle, dis_start, dis_end, dis_chr_cb, NULL);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "Device Information characteristic discovery start rc=%d", rc);
+            discover_hid();
+        }
+        return 0;
+    }
+
+    if (error->status == BLE_HS_EDONE) {
+        if (!dis_start) {
+            ESP_LOGW(TAG, "Device Information service 0x180A not found");
+            discover_hid();
+        }
+        return 0;
+    }
+
+    ESP_LOGW(TAG, "Device Information service discovery status=%d", error->status);
+    discover_hid();
+    return 0;
+}
+
+static void discover_identity(void)
+{
+    dis_start = dis_end = 0;
+    ble_uuid16_t uuid = BLE_UUID16_INIT(0x180A);
+    int rc = ble_gattc_disc_svc_by_uuid(conn_handle, &uuid.u, dis_svc_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "Device Information discovery start rc=%d", rc);
+        discover_hid();
+    }
 }
 
 static int read_report_map_cb(uint16_t ch, const struct ble_gatt_error *error,
@@ -351,7 +479,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             int rc = ble_gattc_exchange_mtu(conn_handle, mtu_cb, NULL);
             if (rc != 0) {
                 ESP_LOGW(TAG, "MTU exchange start rc=%d; continuing", rc);
-                discover_hid();
+                discover_identity();
             }
         }
         return 0;
