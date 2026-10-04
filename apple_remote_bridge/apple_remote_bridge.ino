@@ -16,13 +16,13 @@ static void wifiEventLogger(arduino_event_id_t event, arduino_event_info_t info)
 
 // iPhone HomeKit Television -> Honor X1 BLE HID bridge.
 // The TV should pair this ESP32-C3 as a normal BLE keyboard, so the original
-// HDRC-BV1 remote can remain paired independently.
+// HDRC-BV1-TEST remote can remain paired independently.
 
 static NimBLEHIDDevice *hidDevice = nullptr;
 static NimBLECharacteristic *inputReport = nullptr;
 static bool bleConnected = false;
 
-// Exact keyboard-style report format observed from HDRC-BV1:
+// Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
 static const uint8_t reportMap[] = {
   0x05, 0x01,        // Usage Page (Generic Desktop)
@@ -73,7 +73,7 @@ static void sendHonorKey(uint8_t key) {
 }
 
 static void setupHonorBleKeyboard() {
-  NimBLEDevice::init("HDRC-BV1");
+  NimBLEDevice::init("HDRC-BV1-TEST");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
   // Bonding + Secure Connections, no MITM/passkey UI.
@@ -94,11 +94,11 @@ static void setupHonorBleKeyboard() {
   server->start();
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->setName("HDRC-BV1");
+  adv->setName("HDRC-BV1-TEST");
   adv->addServiceUUID(hidDevice->getHidService()->getUUID());
   adv->setAppearance(HID_KEYBOARD);
 
-  // Step 2 identity test: clone HDRC-BV1 manufacturer data observed in advertising.
+  // Step 2 identity test: clone HDRC-BV1-TEST manufacturer data observed in advertising.
   // Original AD structure was: 05 FF 02 7D 04 00
   static const uint8_t honorManufacturerData[] = {0x02, 0x7D, 0x04, 0x00};
   adv->setManufacturerData(std::vector<uint8_t>(
@@ -107,10 +107,10 @@ static void setupHonorBleKeyboard() {
   adv->enableScanResponse(true);
   adv->start();
 
-  Serial.println("[BLE] Advertising as 'HDRC-BV1' HID keyboard");
+  Serial.println("[BLE] Advertising as 'HDRC-BV1-TEST' HID keyboard");
 }
 
-// Values captured from the original HDRC-BV1.
+// Values captured from the original HDRC-BV1-TEST.
 enum HonorKey : uint8_t {
   HONOR_BACK       = 0x29,
   HONOR_HOME       = 0x4A,
@@ -230,7 +230,7 @@ void setup() {
     ->addLink(speaker);
 
   Serial.println("[HK] HomeKit Television ready");
-  Serial.println("[BLE] Pair 'HDRC-BV1' from the TV Bluetooth settings");
+  Serial.println("[BLE] Pair 'HDRC-BV1-TEST' from the TV Bluetooth settings");
 }
 
 void loop() {
