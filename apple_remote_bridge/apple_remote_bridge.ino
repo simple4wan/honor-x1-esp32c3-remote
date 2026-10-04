@@ -62,12 +62,11 @@ static void configureWakeAdvertising() {
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
 
   NimBLEAddress ownAddr = NimBLEDevice::getAddress();
-  const auto *baseAddr = ownAddr.getBase();
-  const uint8_t *base = baseAddr->val;
 
+  // Captured from the original HDRC-BV1 wake advertisement.
   std::vector<uint8_t> mfg = {
       0x02, 0x7D, 0x03, 0x00,
-      base[5], base[4], base[3], base[2], base[1], base[0],
+      0x18, 0x70, 0x3B, 0x76, 0xB8, 0x45,
       0x01, 0x01
   };
 
@@ -85,9 +84,7 @@ static void configureWakeAdvertising() {
   adv->start();
 
   Serial.printf("[BLE] Wake ADV identity: %s\n", ownAddr.toString().c_str());
-  Serial.print("[BLE] Wake ADV MFG=02 7D 03 00 ");
-  for (int i = 5; i >= 0; --i) Serial.printf("%02X ", base[i]);
-  Serial.println("01 01");
+  Serial.println("[BLE] Wake ADV MFG=02 7D 03 00 18 70 3B 76 B8 45 01 01");
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
@@ -201,12 +198,24 @@ struct HonorTelevision : Service::Television {
 
   boolean update() override {
     if (active->updated()) {
-      Serial.printf("[HK] Power requested: %s\n", active->getNewVal() ? "ON" : "OFF");
-      if (active->getNewVal() && !bleConnected) {
-        Serial.println("[HK] ON while BLE disconnected -> replay wake advertisement");
-        configureWakeAdvertising();
+      const bool wantOn = active->getNewVal();
+      Serial.printf("[HK] Power requested: %s (BLE=%s)\n",
+                    wantOn ? "ON" : "OFF",
+                    bleConnected ? "connected" : "disconnected");
+
+      if (bleConnected) {
+        if (wantOn) {
+          Serial.println("[HK] Ignore duplicate ON while TV BLE is connected");
+        } else {
+          sendHonorKey(HONOR_POWER);
+        }
       } else {
-        sendHonorKey(HONOR_POWER);
+        if (wantOn) {
+          Serial.println("[HK] ON while BLE disconnected -> replay wake advertisement");
+          configureWakeAdvertising();
+        } else {
+          Serial.println("[HK] Ignore OFF while TV BLE is disconnected");
+        }
       }
     }
 
