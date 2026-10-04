@@ -20,6 +20,9 @@ static void wifiEventLogger(arduino_event_id_t event, arduino_event_info_t info)
 
 static NimBLEHIDDevice *hidDevice = nullptr;
 static NimBLECharacteristic *inputReport = nullptr;
+static NimBLECharacteristic *inputReport2 = nullptr;
+static NimBLECharacteristic *inputReport5A = nullptr;
+static NimBLECharacteristic *outputReport5A = nullptr;
 static bool bleConnected = false;
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
@@ -75,6 +78,9 @@ static void setupHonorBleKeyboard() {
 
   hidDevice = new NimBLEHIDDevice(server);
   inputReport = hidDevice->getInputReport(1);
+  inputReport5A = hidDevice->getInputReport(0x5A);
+  outputReport5A = hidDevice->getOutputReport(0x5A);
+  inputReport2 = hidDevice->getInputReport(2);
   hidDevice->setManufacturer("ESP32 Honor Bridge");
   hidDevice->setPnp(0x02, 0x05AC, 0x0220, 0x0100);
   hidDevice->setHidInfo(0x00, 0x02);
