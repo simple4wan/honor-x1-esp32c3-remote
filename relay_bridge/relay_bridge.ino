@@ -39,6 +39,8 @@ static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
 
 static void configureWakeAdvertising();
 static void configurePairingAdvertising();
+static void configureBondedIdleAdvertising();
+static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
 
@@ -250,6 +252,48 @@ static void startOriginalRemoteScan() {
   Serial.println("[REMOTE] Scanning for original HDRC-BV1");
 }
 
+static bool hasTvBond() {
+  const std::string remoteAddr = "18:70:3b:76:b8:45";
+  const int count = NimBLEDevice::getNumBonds();
+
+  for (int i = 0; i < count; ++i) {
+    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
+    std::string addr = peer.toString();
+    if (addr != remoteAddr && addr != "18:70:3B:76:B8:45") {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void configureBondedIdleAdvertising() {
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+
+  // Daily reconnect state for an already bonded TV.
+  // Keep the HID identity/name/UUID, but do NOT expose the original
+  // pairing-mode manufacturer marker 02 7D 04 00.
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x05);
+  advData.addServiceUUID(NimBLEUUID((uint16_t)0x1812));
+  advData.setAppearance(0x03C1);
+
+  NimBLEAdvertisementData scanData;
+  scanData.setName("HDRC-BV1");
+
+  adv->stop();
+  adv->setConnectableMode(BLE_GAP_CONN_MODE_UND);
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanData);
+  adv->enableScanResponse(true);
+  adv->setScanFilter(false, false);
+  adv->setMinInterval(0x30);
+  adv->setMaxInterval(0x60);
+  const bool started = adv->start();
+
+  Serial.printf("[BLE] Bonded idle ADV started=%d as HDRC-BV1 (no pairing MFG)\n",
+                started);
+}
+
 static void configurePairingAdvertising() {
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
 
@@ -383,8 +427,13 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnected = false;
     Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
     wakePulseActive = false;
-    Serial.println("[BLE] TV disconnected -> arm normal HDRC-BV1 advertising; Power will trigger transient wake ADV");
-    configurePairingAdvertising();
+    if (tvBondedThisBoot || hasTvBond()) {
+      Serial.println("[BLE] TV disconnected -> bonded idle ADV; Power will trigger transient wake ADV");
+      configureBondedIdleAdvertising();
+    } else {
+      Serial.println("[BLE] TV disconnected without TV bond -> pairing ADV");
+      configurePairingAdvertising();
+    }
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
@@ -469,7 +518,13 @@ static void setupHonorBleKeyboard() {
   hidDevice->setBatteryLevel(100);
 
   server->start();
-  configurePairingAdvertising();
+  if (hasTvBond()) {
+    Serial.println("[BLE] Existing TV bond detected -> start bonded idle ADV");
+    configureBondedIdleAdvertising();
+  } else {
+    Serial.println("[BLE] No TV bond detected -> start pairing ADV");
+    configurePairingAdvertising();
+  }
 }
 
 // Values captured from the original HDRC-BV1-TEST.
@@ -611,7 +666,7 @@ void setup() {
     ->addLink(speaker);
 
   Serial.println("[HK] HomeKit Television ready");
-  Serial.println("[BLE] TV side: ESP32 is advertising as HDRC-BV1 pairing mode");
+  Serial.println("[BLE] TV side: ESP32 HDRC-BV1 advertising state ready");
 }
 
 void loop() {
@@ -620,8 +675,13 @@ void loop() {
   if (wakePulseActive && !bleConnected &&
       (int32_t)(millis() - wakePulseUntil) >= 0) {
     wakePulseActive = false;
-    Serial.println("[WAKE] Wake pulse expired -> restore normal HDRC-BV1 advertising");
-    configurePairingAdvertising();
+    if (tvBondedThisBoot || hasTvBond()) {
+      Serial.println("[WAKE] Wake pulse expired -> restore bonded idle ADV");
+      configureBondedIdleAdvertising();
+    } else {
+      Serial.println("[WAKE] Wake pulse expired -> restore pairing ADV");
+      configurePairingAdvertising();
+    }
   }
 
   if (remoteDoConnect) {
