@@ -118,6 +118,17 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
   }
 };
 
+static bool remoteAdvHasMfg(const NimBLEAdvertisedDevice *device,
+                            uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+  if (!device->haveManufacturerData()) return false;
+  std::string mfg = device->getManufacturerData();
+  return mfg.size() >= 4 &&
+         (uint8_t)mfg[0] == b0 &&
+         (uint8_t)mfg[1] == b1 &&
+         (uint8_t)mfg[2] == b2 &&
+         (uint8_t)mfg[3] == b3;
+}
+
 static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
   const uint32_t now = millis();
   const uint32_t dt = remoteAdvLastAt ? (uint32_t)(now - remoteAdvLastAt) : 0;
@@ -181,6 +192,24 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
                   device->getRSSI());
 
     logRemoteAdvertisement(device);
+
+    const bool mfg0400 = remoteAdvHasMfg(device, 0x02, 0x7D, 0x04, 0x00);
+    const bool mfg0411 = remoteAdvHasMfg(device, 0x02, 0x7D, 0x04, 0x11);
+
+    // advType=3 seen from HDRC-BV1 is non-connectable (conn=0). Never try
+    // to connect to the fixed public address just because we saw this packet.
+    if (!device->isConnectable()) {
+      Serial.println("[REMOTE] Ignore non-connectable HDRC-BV1 advertisement");
+      return;
+    }
+
+    if (mfg0400) {
+      Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 00");
+    } else if (mfg0411) {
+      Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 11");
+    } else {
+      Serial.println("[REMOTE] Connectable state: other manufacturer payload");
+    }
 
     remoteAdv = device;
 
