@@ -35,6 +35,7 @@ static NimBLEClient *remoteClient = nullptr;
 static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
 
 static void configureWakeAdvertising();
+static void startOriginalRemoteScan();
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -99,13 +100,20 @@ static RemoteClientCallbacks remoteClientCallbacks;
 
 class RemoteScanCallbacks : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice *device) override {
-    if (!device->haveName() || device->getName() != "HDRC-BV1") return;
-
     const std::string addr = device->getAddress().toString();
-    if (addr != "18:70:3b:76:b8:45" && addr != "18:70:3B:76:B8:45") return;
+    const bool targetAddr =
+        (addr == "18:70:3b:76:b8:45" || addr == "18:70:3B:76:B8:45");
+    const bool targetName =
+        device->haveName() && device->getName() == "HDRC-BV1";
 
-    Serial.printf("[REMOTE] Found original HDRC-BV1 %s RSSI=%d\n",
-                  addr.c_str(), device->getRSSI());
+    // A bonded HDRC-BV1 may advertise without Local Name during normal
+    // reconnect/wake. Its fixed public address is the authoritative match.
+    if (!targetAddr && !targetName) return;
+
+    Serial.printf("[REMOTE] Found original HDRC-BV1 %s name=%s RSSI=%d\n",
+                  addr.c_str(),
+                  device->haveName() ? device->getName().c_str() : "<none>",
+                  device->getRSSI());
     NimBLEDevice::getScan()->stop();
     remoteAdv = device;
     remoteDoConnect = true;
@@ -293,6 +301,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo) override {
     bleConnected = true;
     Serial.printf("[BLE] TV connected: %s\n", connInfo.getAddress().toString().c_str());
+    if (!remoteConnected && !remoteDoConnect) {
+      Serial.println("[REMOTE] Ensure scan after TV connection");
+      startOriginalRemoteScan();
+    }
   }
 
   void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
@@ -311,6 +323,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] TV security encrypted=%d authenticated=%d bonded=%d peer=%s\n",
                   connInfo.isEncrypted(), connInfo.isAuthenticated(), connInfo.isBonded(),
                   connInfo.getAddress().toString().c_str());
+    if (!remoteConnected && !remoteDoConnect) {
+      startOriginalRemoteScan();
+    }
   }
 };
 
