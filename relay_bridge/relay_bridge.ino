@@ -27,11 +27,14 @@ static NimBLECharacteristic *inputReport2 = nullptr;
 static NimBLECharacteristic *inputReport5A = nullptr;
 static NimBLECharacteristic *outputReport5A = nullptr;
 static bool bleConnected = false;
+static bool tvBondedThisBoot = false;
 static bool remoteConnected = false;
 static bool remoteDoConnect = false;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEClient *remoteClient = nullptr;
 static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
+
+static void configureWakeAdvertising();
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -54,7 +57,12 @@ static void relayRemoteReport(NimBLERemoteCharacteristic *chr, uint8_t *data,
                 data[4], data[5], data[6], data[7]);
 
   if (!bleConnected || !inputReport) {
-    Serial.println("[RELAY] TV not connected; report not forwarded");
+    if (len >= 3 && data[2] == 0x66) {
+      Serial.println("[RELAY] Power pressed while TV disconnected -> wake advertisement");
+      configureWakeAdvertising();
+    } else {
+      Serial.println("[RELAY] TV not connected; report not forwarded");
+    }
     return;
   }
 
@@ -246,10 +254,20 @@ static void configureWakeAdvertising() {
 
   NimBLEAddress ownAddr = NimBLEDevice::getAddress();
 
-  // Captured from the original HDRC-BV1 wake advertisement.
+  // The original HDRC-BV1 wake advertisement embeds its own public BLE
+  // identity address in manufacturer data. Since the TV is now bonded to
+  // this ESP32, advertise the ESP32's bonded identity instead.
+  uint8_t mac[6] = {0};
+  unsigned int b[6] = {0};
+  const std::string own = ownAddr.toString();
+  if (sscanf(own.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x",
+             &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
+    for (int i = 0; i < 6; ++i) mac[i] = (uint8_t)b[i];
+  }
+
   std::vector<uint8_t> mfg = {
       0x02, 0x7D, 0x03, 0x00,
-      0x18, 0x70, 0x3B, 0x76, 0xB8, 0x45,
+      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
       0x01, 0x01
   };
 
@@ -267,7 +285,8 @@ static void configureWakeAdvertising() {
   adv->start();
 
   Serial.printf("[BLE] Wake ADV identity: %s\n", ownAddr.toString().c_str());
-  Serial.println("[BLE] Wake ADV MFG=02 7D 03 00 18 70 3B 76 B8 45 01 01");
+  Serial.printf("[BLE] Wake ADV MFG=02 7D 03 00 %02X %02X %02X %02X %02X %02X 01 01\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
@@ -279,10 +298,16 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
     bleConnected = false;
     Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
-    configurePairingAdvertising();
+    if (tvBondedThisBoot) {
+      Serial.println("[BLE] Bonded TV disconnected -> switch to wake advertisement");
+      configureWakeAdvertising();
+    } else {
+      configurePairingAdvertising();
+    }
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
+    tvBondedThisBoot = connInfo.isBonded();
     Serial.printf("[BLE] TV security encrypted=%d authenticated=%d bonded=%d peer=%s\n",
                   connInfo.isEncrypted(), connInfo.isAuthenticated(), connInfo.isBonded(),
                   connInfo.getAddress().toString().c_str());
