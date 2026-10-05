@@ -28,6 +28,8 @@ static NimBLECharacteristic *inputReport5A = nullptr;
 static NimBLECharacteristic *outputReport5A = nullptr;
 static bool bleConnected = false;
 static bool tvBondedThisBoot = false;
+static bool wakePulseActive = false;
+static uint32_t wakePulseUntil = 0;
 static bool remoteConnected = false;
 static bool remoteDoConnect = false;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
@@ -36,6 +38,8 @@ static NimBLEClient *remoteClient = nullptr;
 static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
 
 static void configureWakeAdvertising();
+static void configurePairingAdvertising();
+static void requestWakePulse();
 static void startOriginalRemoteScan();
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
@@ -60,8 +64,8 @@ static void relayRemoteReport(NimBLERemoteCharacteristic *chr, uint8_t *data,
 
   if (!bleConnected || !inputReport) {
     if (len >= 3 && data[2] == 0x66) {
-      Serial.println("[RELAY] Power pressed while TV disconnected -> wake advertisement");
-      configureWakeAdvertising();
+      Serial.println("[RELAY] Power pressed while TV disconnected -> wake pulse");
+      requestWakePulse();
     } else {
       Serial.println("[RELAY] TV not connected; report not forwarded");
     }
@@ -356,9 +360,18 @@ static void configureWakeAdvertising() {
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+static void requestWakePulse() {
+  Serial.println("[WAKE] Normal ADV -> transient wake ADV");
+  configureWakeAdvertising();
+  wakePulseActive = true;
+  wakePulseUntil = millis() + 2000;
+  Serial.println("[WAKE] Wake pulse armed for 2000 ms");
+}
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo) override {
     bleConnected = true;
+    wakePulseActive = false;
     Serial.printf("[BLE] TV connected: %s\n", connInfo.getAddress().toString().c_str());
     if (!remoteConnected && !remoteDoConnect) {
       Serial.println("[REMOTE] Ensure scan after TV connection");
@@ -369,12 +382,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
     bleConnected = false;
     Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
-    if (tvBondedThisBoot) {
-      Serial.println("[BLE] Bonded TV disconnected -> switch to wake advertisement");
-      configureWakeAdvertising();
-    } else {
-      configurePairingAdvertising();
-    }
+    wakePulseActive = false;
+    Serial.println("[BLE] TV disconnected -> arm normal HDRC-BV1 advertising; Power will trigger transient wake ADV");
+    configurePairingAdvertising();
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
@@ -505,8 +515,8 @@ struct HonorTelevision : Service::Television {
         }
       } else {
         if (wantOn) {
-          Serial.println("[HK] ON while BLE disconnected -> replay wake advertisement");
-          configureWakeAdvertising();
+          Serial.println("[HK] ON while BLE disconnected -> wake pulse");
+          requestWakePulse();
         } else {
           Serial.println("[HK] Ignore OFF while TV BLE is disconnected");
         }
@@ -606,6 +616,13 @@ void setup() {
 
 void loop() {
   homeSpan.poll();
+
+  if (wakePulseActive && !bleConnected &&
+      (int32_t)(millis() - wakePulseUntil) >= 0) {
+    wakePulseActive = false;
+    Serial.println("[WAKE] Wake pulse expired -> restore normal HDRC-BV1 advertising");
+    configurePairingAdvertising();
+  }
 
   if (remoteDoConnect) {
     Serial.println("[REMOTE] Processing scheduled connect");
