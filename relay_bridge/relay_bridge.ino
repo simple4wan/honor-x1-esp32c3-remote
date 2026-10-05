@@ -60,6 +60,8 @@ static void configureBondedIdleAdvertising();
 static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
+static bool hasOriginalRemoteBond();
+static void logBleBonds(const char *tag);
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -126,6 +128,7 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
                   info.getAddress().toString().c_str());
 
     remoteSecurityReady = info.isEncrypted();
+    logBleBonds(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
     if (!info.isEncrypted()) {
       NimBLEClient *client = NimBLEDevice::getClientByHandle(info.getConnHandle());
       if (client) client->disconnect();
@@ -341,8 +344,10 @@ static bool connectOriginalRemote() {
     remoteClient->setConnectRetries(2);
   }
 
-  Serial.printf("[REMOTE] Connecting to %s\n",
-                remoteConnectAddr.toString().c_str());
+  Serial.printf("[REMOTE] Connecting to %s remoteBond=%d totalBonds=%d\n",
+                remoteConnectAddr.toString().c_str(),
+                hasOriginalRemoteBond(),
+                NimBLEDevice::getNumBonds());
   // Skip MTU exchange during connect; HDRC-BV1 reports are only 8 bytes.
   // This reduces radio/control traffic while TV + remote links coexist.
   if (!remoteClient->connect(remoteConnectAddr, true, false, false)) {
@@ -445,6 +450,38 @@ static void startOriginalRemoteScan() {
   scan->setActiveScan(true);
   scan->start(0, false, true);
   Serial.println("[REMOTE] Scanning for original HDRC-BV1");
+}
+
+static bool hasOriginalRemoteBond() {
+  const std::string remoteAddr = "18:70:3b:76:b8:45";
+  const int count = NimBLEDevice::getNumBonds();
+
+  for (int i = 0; i < count; ++i) {
+    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
+    std::string addr = peer.toString();
+    if (addr == remoteAddr || addr == "18:70:3B:76:B8:45") {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void logBleBonds(const char *tag) {
+  const int count = NimBLEDevice::getNumBonds();
+  Serial.printf("[BOND] %s count=%d remotePresent=%d\n",
+                tag, count, hasOriginalRemoteBond());
+
+  for (int i = 0; i < count; ++i) {
+    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
+    Serial.printf("[BOND] #%d %s type=%u%s\n",
+                  i,
+                  peer.toString().c_str(),
+                  peer.getType(),
+                  (peer.toString() == "18:70:3b:76:b8:45" ||
+                   peer.toString() == "18:70:3B:76:B8:45")
+                      ? " (original remote)"
+                      : "");
+  }
 }
 
 static bool hasTvBond() {
@@ -685,6 +722,7 @@ static void setupHonorBleKeyboard() {
   // which can overwrite the wake ADV configured in that callback.
   server->advertiseOnDisconnect(false);
   Serial.println("[BLE] Server auto-advertise-on-disconnect disabled");
+  logBleBonds("boot");
 
   hidDevice = new NimBLEHIDDevice(server);
   inputReport = hidDevice->getInputReport(1);
