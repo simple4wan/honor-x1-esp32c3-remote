@@ -271,8 +271,43 @@ static void configurePairingAdvertising() {
   Serial.println("[BLE] Pairing ADV started as HDRC-BV1 (TV pairing mode)");
 }
 
+
+static const char* addrTypeName(uint8_t type) {
+  switch (type) {
+    case BLE_ADDR_PUBLIC: return "PUBLIC";
+    case BLE_ADDR_RANDOM: return "RANDOM";
+#ifdef BLE_ADDR_PUBLIC_ID
+    case BLE_ADDR_PUBLIC_ID: return "PUBLIC_ID";
+#endif
+#ifdef BLE_ADDR_RANDOM_ID
+    case BLE_ADDR_RANDOM_ID: return "RANDOM_ID";
+#endif
+    default: return "UNKNOWN";
+  }
+}
+
+static void logWakeDiagnostics() {
+  NimBLEAddress ownAddr = NimBLEDevice::getAddress();
+  Serial.printf("[WAKE-DIAG] own=%s type=%u(%s) public=%d random=%d rpa=%d nrpa=%d static=%d\n",
+                ownAddr.toString().c_str(),
+                ownAddr.getType(), addrTypeName(ownAddr.getType()),
+                ownAddr.isPublic(), ownAddr.getType() == BLE_ADDR_RANDOM,
+                ownAddr.isRpa(), ownAddr.isNrpa(), ownAddr.isStatic());
+
+  Serial.printf("[WAKE-DIAG] bonds=%u\n", (unsigned)NimBLEDevice::getNumBonds());
+  for (int i = 0; i < NimBLEDevice::getNumBonds(); ++i) {
+    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
+    Serial.printf("[WAKE-DIAG] bond[%d]=%s type=%u(%s)\n",
+                  i, peer.toString().c_str(), peer.getType(), addrTypeName(peer.getType()));
+  }
+
+  Serial.println("[WAKE-DIAG] target legacy ADV: connectable=yes scannable=no flags=0x04 interval=0x20..0x30");
+}
+
 static void configureWakeAdvertising() {
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+
+  logWakeDiagnostics();
 
   NimBLEAddress ownAddr = NimBLEDevice::getAddress();
 
@@ -306,7 +341,8 @@ static void configureWakeAdvertising() {
   adv->setMaxInterval(0x30);
   adv->start();
 
-  Serial.printf("[BLE] Wake ADV identity: %s\n", ownAddr.toString().c_str());
+  Serial.printf("[BLE] Wake ADV identity: %s type=%u(%s)\n",
+                ownAddr.toString().c_str(), ownAddr.getType(), addrTypeName(ownAddr.getType()));
   Serial.printf("[BLE] Wake ADV MFG=02 7D 03 00 %02X %02X %02X %02X %02X %02X 01 01\n",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
