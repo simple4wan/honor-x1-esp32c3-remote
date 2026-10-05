@@ -34,6 +34,8 @@ static bool wakePulseActive = false;
 static uint32_t wakePulseUntil = 0;
 static bool remoteConnected = false;
 static bool remoteSecurityReady = false;
+static bool tvAdvertisingDeferredForRemote = false;
+static uint32_t tvAdvertisingDeferUntil = 0;
 static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
 static uint32_t remoteAdvLastAt = 0;
@@ -54,6 +56,7 @@ static void requestWakePulse();
 static void startOriginalRemoteScan();
 static bool hasOriginalRemoteBond();
 static void logBleBonds(const char *tag);
+static void releaseDeferredTvAdvertising(const char *reason);
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -89,6 +92,19 @@ static void relayRemoteReport(NimBLERemoteCharacteristic *chr, uint8_t *data,
   inputReport->notify();
 }
 
+static void releaseDeferredTvAdvertising(const char *reason) {
+  if (!tvAdvertisingDeferredForRemote) return;
+
+  tvAdvertisingDeferredForRemote = false;
+  Serial.printf("[BLE] Release deferred TV advertising: %s\n", reason);
+
+  if (hasTvBond()) {
+    configureBondedIdleAdvertising();
+  } else {
+    configurePairingAdvertising();
+  }
+}
+
 class RemoteClientCallbacks : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient *client) override {
     remoteConnected = true;
@@ -120,6 +136,10 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
 
     remoteSecurityReady = info.isEncrypted();
     logBleBonds(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
+
+    if (info.isEncrypted()) {
+      releaseDeferredTvAdvertising("original remote security restored");
+    }
     if (!info.isEncrypted()) {
       NimBLEClient *client = NimBLEDevice::getClientByHandle(info.getConnHandle());
       if (client) client->disconnect();
@@ -708,7 +728,17 @@ static void setupHonorBleKeyboard() {
   hidDevice->setBatteryLevel(100);
 
   server->start();
-  if (hasTvBond()) {
+
+  // On reboot, the TV and original remote can both reconnect immediately.
+  // The remote's bonded security restore is timing-sensitive and repeatedly
+  // times out if the TV establishes its peripheral connection at the same time.
+  // Give the original remote exclusive BLE reconnect priority for a short window.
+  if (hasOriginalRemoteBond()) {
+    tvAdvertisingDeferredForRemote = true;
+    tvAdvertisingDeferUntil = millis() + 6000;
+    NimBLEDevice::getAdvertising()->stop();
+    Serial.println("[BLE] TV advertising deferred up to 6000 ms; restore original remote bond first");
+  } else if (hasTvBond()) {
     Serial.println("[BLE] Existing TV bond detected -> start bonded idle ADV");
     configureBondedIdleAdvertising();
   } else {
@@ -867,6 +897,14 @@ void setup() {
 
 void loop() {
   homeSpan.poll();
+
+  if (tvAdvertisingDeferredForRemote &&
+      !remoteSecurityReady &&
+      !remoteConnected &&
+      !remoteDoConnect &&
+      (int32_t)(millis() - tvAdvertisingDeferUntil) >= 0) {
+    releaseDeferredTvAdvertising("remote reconnect grace period expired");
+  }
 
   if (wakePulseActive && !bleConnected &&
       (int32_t)(millis() - wakePulseUntil) >= 0) {
