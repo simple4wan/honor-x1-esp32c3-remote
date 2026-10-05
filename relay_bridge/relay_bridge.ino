@@ -38,6 +38,9 @@ static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
 static uint32_t remoteAdvLastAt = 0;
 static uint32_t remoteAdvSeq = 0;
+static uint32_t remoteAdvLastLogAt = 0;
+static uint32_t remoteAdvLastSignature = 0xFFFFFFFF;
+static bool remoteAdvVerboseThisPacket = true;
 static bool remoteObserveActive = false;
 static uint32_t remoteObserveStartAt = 0;
 static uint32_t remoteObserveLastAt = 0;
@@ -162,6 +165,29 @@ static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
                       ? device->getManufacturerData()
                       : std::string();
 
+  const uint8_t m0 = mfg.size() > 0 ? (uint8_t)mfg[0] : 0;
+  const uint8_t m1 = mfg.size() > 1 ? (uint8_t)mfg[1] : 0;
+  const uint8_t m2 = mfg.size() > 2 ? (uint8_t)mfg[2] : 0;
+  const uint8_t m3 = mfg.size() > 3 ? (uint8_t)mfg[3] : 0;
+
+  const uint32_t signature =
+      ((uint32_t)device->getAdvType() << 24) |
+      ((uint32_t)device->getAdvFlags() << 16) |
+      ((uint32_t)(device->isConnectable() ? 1 : 0) << 15) |
+      ((uint32_t)m2 << 8) |
+      (uint32_t)m3;
+
+  // Home+Menu can produce tens of duplicate advertisements per second.
+  // Print immediately when the state changes, otherwise at most once/second.
+  remoteAdvVerboseThisPacket =
+      signature != remoteAdvLastSignature ||
+      (uint32_t)(now - remoteAdvLastLogAt) >= 1000;
+
+  if (!remoteAdvVerboseThisPacket) return;
+
+  remoteAdvLastSignature = signature;
+  remoteAdvLastLogAt = now;
+
   String mfgHex;
   for (size_t i = 0; i < mfg.size(); ++i) {
     char buf[4];
@@ -186,15 +212,13 @@ static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
       device->getRSSI(),
       mfgHex.length() ? mfgHex.c_str() : "<none>",
       device->getServiceUUIDCount());
+
   const auto& rawPayload = device->getPayload();
   if (!rawPayload.empty()) {
     String rawHex = bytesToHex(rawPayload.data(), rawPayload.size());
     Serial.printf("[REMOTE-RAW] len=%u payload=%s\n",
                   (unsigned)rawPayload.size(), rawHex.c_str());
-  } else {
-    Serial.println("[REMOTE-RAW] len=0 payload=<none>");
   }
-
 
   if (device->haveServiceUUID()) {
     for (uint8_t i = 0; i < device->getServiceUUIDCount(); ++i) {
@@ -218,12 +242,14 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
     // reconnect/wake. Its fixed public address is the authoritative match.
     if (!targetAddr && !targetName) return;
 
-    Serial.printf("[REMOTE] Found original HDRC-BV1 %s name=%s RSSI=%d\n",
-                  addr.c_str(),
-                  device->haveName() ? device->getName().c_str() : "<none>",
-                  device->getRSSI());
-
     logRemoteAdvertisement(device);
+
+    if (remoteAdvVerboseThisPacket) {
+      Serial.printf("[REMOTE] Found original HDRC-BV1 %s name=%s RSSI=%d\n",
+                    addr.c_str(),
+                    device->haveName() ? device->getName().c_str() : "<none>",
+                    device->getRSSI());
+    }
 
     const bool mfg0400 = remoteAdvHasMfg(device, 0x02, 0x7D, 0x04, 0x00);
     const bool mfg0411 = remoteAdvHasMfg(device, 0x02, 0x7D, 0x04, 0x11);
@@ -231,16 +257,20 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
     // advType=3 seen from HDRC-BV1 is non-connectable (conn=0). Never try
     // to connect to the fixed public address just because we saw this packet.
     if (!device->isConnectable()) {
-      Serial.println("[REMOTE] Ignore non-connectable HDRC-BV1 advertisement");
+      if (remoteAdvVerboseThisPacket) {
+        Serial.println("[REMOTE] Ignore non-connectable HDRC-BV1 advertisement");
+      }
       return;
     }
 
-    if (mfg0400) {
-      Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 00");
-    } else if (mfg0411) {
-      Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 11");
-    } else {
-      Serial.println("[REMOTE] Connectable state: other manufacturer payload");
+    if (remoteAdvVerboseThisPacket) {
+      if (mfg0400) {
+        Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 00");
+      } else if (mfg0411) {
+        Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 11");
+      } else {
+        Serial.println("[REMOTE] Connectable state: other manufacturer payload");
+      }
     }
 
     remoteAdv = device;
