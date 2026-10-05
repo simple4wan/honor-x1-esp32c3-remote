@@ -27,6 +27,15 @@ static NimBLECharacteristic *inputReport2 = nullptr;
 static NimBLECharacteristic *inputReport5A = nullptr;
 static NimBLECharacteristic *outputReport5A = nullptr;
 static bool bleConnected = false;
+static SpanCharacteristic *homeKitActive = nullptr;
+
+// HomeKit RemoteKey has no explicit release event. Keep a key down briefly and
+// refresh the deadline when iOS repeats the same RemoteKey during a long press.
+static bool homeKitKeyHeld = false;
+static uint8_t homeKitHeldKey = 0;
+static uint32_t homeKitKeyReleaseAt = 0;
+static constexpr uint32_t HOMEKIT_HOLD_RELEASE_MS = 260;
+
 static bool tvBondedThisBoot = false;
 static bool wakePulseActive = false;
 static uint32_t wakePulseUntil = 0;
@@ -43,6 +52,8 @@ static void configureBondedIdleAdvertising();
 static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
+static void queueHomeKitKey(uint8_t key);
+static void releaseHomeKitKey();
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -412,10 +423,52 @@ static void requestWakePulse() {
   Serial.println("[WAKE] Wake pulse armed for 8000 ms");
 }
 
+
+static void releaseHomeKitKey() {
+  if (!homeKitKeyHeld || !inputReport) return;
+
+  uint8_t release[8] = {0};
+  inputReport->setValue(release, sizeof(release));
+  inputReport->notify();
+
+  Serial.printf("[HK-HOLD] Release key 0x%02X\n", homeKitHeldKey);
+  homeKitKeyHeld = false;
+  homeKitHeldKey = 0;
+  homeKitKeyReleaseAt = 0;
+}
+
+static void queueHomeKitKey(uint8_t key) {
+  if (!bleConnected || !inputReport) {
+    Serial.printf("[BLE] Not connected; key 0x%02X ignored\n", key);
+    return;
+  }
+
+  if (homeKitKeyHeld && homeKitHeldKey != key) {
+    releaseHomeKitKey();
+  }
+
+  if (!homeKitKeyHeld) {
+    uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
+    inputReport->setValue(press, sizeof(press));
+    inputReport->notify();
+    homeKitKeyHeld = true;
+    homeKitHeldKey = key;
+    Serial.printf("[HK-HOLD] Press key 0x%02X\n", key);
+  } else {
+    Serial.printf("[HK-HOLD] Extend key 0x%02X\n", key);
+  }
+
+  homeKitKeyReleaseAt = millis() + HOMEKIT_HOLD_RELEASE_MS;
+}
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo) override {
     bleConnected = true;
     wakePulseActive = false;
+    if (homeKitActive) {
+      homeKitActive->setVal(1);
+      Serial.println("[HK] Active synced -> ON (TV BLE connected)");
+    }
     Serial.printf("[BLE] TV connected: %s\n", connInfo.getAddress().toString().c_str());
     if (!remoteConnected && !remoteDoConnect) {
       Serial.println("[REMOTE] Ensure scan after TV connection");
@@ -425,6 +478,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
   void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
     bleConnected = false;
+    releaseHomeKitKey();
+    if (homeKitActive) {
+      homeKitActive->setVal(0);
+      Serial.println("[HK] Active synced -> OFF (TV BLE disconnected)");
+    }
     Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
     wakePulseActive = false;
     if (tvBondedThisBoot || hasTvBond()) {
@@ -551,6 +609,7 @@ struct HonorTelevision : Service::Television {
 
   HonorTelevision(const char *name) : Service::Television() {
     active = new Characteristic::Active(0);
+    homeKitActive = active;
     configuredName = new Characteristic::ConfiguredName(name);
     remoteKey = new Characteristic::RemoteKey();
   }
@@ -582,14 +641,14 @@ struct HonorTelevision : Service::Television {
       const int key = remoteKey->getNewVal();
       Serial.printf("[HK] RemoteKey=%d\n", key);
       switch (key) {
-        case 4:  sendHonorKey(HONOR_UP); break;
-        case 5:  sendHonorKey(HONOR_DOWN); break;
-        case 6:  sendHonorKey(HONOR_LEFT); break;
-        case 7:  sendHonorKey(HONOR_RIGHT); break;
-        case 8:  sendHonorKey(HONOR_OK); break;
-        case 9:  sendHonorKey(HONOR_BACK); break;
-        case 11: sendHonorKey(HONOR_HOME); break; // temporary mapping
-        case 15: sendHonorKey(HONOR_MENU); break; // Info -> Menu
+        case 4:  queueHomeKitKey(HONOR_UP); break;
+        case 5:  queueHomeKitKey(HONOR_DOWN); break;
+        case 6:  queueHomeKitKey(HONOR_LEFT); break;
+        case 7:  queueHomeKitKey(HONOR_RIGHT); break;
+        case 8:  queueHomeKitKey(HONOR_OK); break;
+        case 9:  queueHomeKitKey(HONOR_BACK); break;
+        case 11: queueHomeKitKey(HONOR_HOME); break; // temporary mapping
+        case 15: queueHomeKitKey(HONOR_MENU); break; // Info -> Menu
         default:
           Serial.printf("[HK] Unmapped RemoteKey=%d\n", key);
           break;
@@ -671,6 +730,11 @@ void setup() {
 
 void loop() {
   homeSpan.poll();
+
+  if (homeKitKeyHeld && bleConnected &&
+      (int32_t)(millis() - homeKitKeyReleaseAt) >= 0) {
+    releaseHomeKitKey();
+  }
 
   if (wakePulseActive && !bleConnected &&
       (int32_t)(millis() - wakePulseUntil) >= 0) {
