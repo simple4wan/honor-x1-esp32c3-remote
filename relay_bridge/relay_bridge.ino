@@ -48,6 +48,10 @@ static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
 static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
+static bool remoteBootOurSecValid = false;
+static bool remoteBootPeerSecValid = false;
+static struct ble_store_value_sec remoteBootOurSec = {};
+static struct ble_store_value_sec remoteBootPeerSec = {};
 
 static void configureWakeAdvertising();
 static void configurePairingAdvertising();
@@ -58,6 +62,8 @@ static void startOriginalRemoteScan();
 static bool hasOriginalRemoteBond();
 static void logBleBonds(const char *tag);
 static void logRemoteSecurityStore(const char *tag);
+static void captureRemoteBootSecurityStore();
+static void forcePersistRemoteSecurityIfChanged();
 static void releaseDeferredTvAdvertising(const char *reason);
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
@@ -141,6 +147,7 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
     logRemoteSecurityStore(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
 
     if (info.isEncrypted()) {
+      forcePersistRemoteSecurityIfChanged();
       releaseDeferredTvAdvertising("original remote security restored");
     }
     if (!info.isEncrypted()) {
@@ -458,6 +465,103 @@ static void logRemoteSecurityStore(const char *tag) {
                 peerRc == 0 ? peer.bond_count : 0);
 }
 
+static bool readRemoteSecurityStore(struct ble_store_value_sec *our,
+                                    struct ble_store_value_sec *peer) {
+  const NimBLEAddress remote("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+
+  struct ble_store_key_sec key = {};
+  key.peer_addr = *remote.getBase();
+  key.idx = 0;
+
+  const int ourRc = ble_store_read_our_sec(&key, our);
+  const int peerRc = ble_store_read_peer_sec(&key, peer);
+  return ourRc == 0 && peerRc == 0;
+}
+
+static void captureRemoteBootSecurityStore() {
+  struct ble_store_value_sec our = {};
+  struct ble_store_value_sec peer = {};
+
+  if (readRemoteSecurityStore(&our, &peer)) {
+    remoteBootOurSec = our;
+    remoteBootPeerSec = peer;
+    remoteBootOurSecValid = true;
+    remoteBootPeerSecValid = true;
+    Serial.printf("[SECSTORE] boot snapshot captured OUR bondCount=%u PEER bondCount=%u\n",
+                  our.bond_count, peer.bond_count);
+  } else {
+    remoteBootOurSecValid = false;
+    remoteBootPeerSecValid = false;
+    Serial.println("[SECSTORE] boot snapshot unavailable");
+  }
+}
+
+static bool secRecordChanged(const struct ble_store_value_sec& a,
+                             const struct ble_store_value_sec& b) {
+  return a.bond_count != b.bond_count ||
+         a.key_size != b.key_size ||
+         a.ediv != b.ediv ||
+         a.rand_num != b.rand_num ||
+         a.ltk_present != b.ltk_present ||
+         (a.ltk_present && memcmp(a.ltk, b.ltk, sizeof(a.ltk)) != 0) ||
+         a.irk_present != b.irk_present ||
+         (a.irk_present && memcmp(a.irk, b.irk, sizeof(a.irk)) != 0) ||
+         a.csrk_present != b.csrk_present ||
+         (a.csrk_present && memcmp(a.csrk, b.csrk, sizeof(a.csrk)) != 0) ||
+         a.authenticated != b.authenticated ||
+         a.sc != b.sc;
+}
+
+static void forcePersistRemoteSecurityIfChanged() {
+  struct ble_store_value_sec our = {};
+  struct ble_store_value_sec peer = {};
+
+  if (!readRemoteSecurityStore(&our, &peer)) {
+    Serial.println("[SECSTORE] force-persist skipped: current remote security records unavailable");
+    return;
+  }
+
+  const bool changed =
+      !remoteBootOurSecValid || !remoteBootPeerSecValid ||
+      secRecordChanged(our, remoteBootOurSec) ||
+      secRecordChanged(peer, remoteBootPeerSec);
+
+  if (!changed) {
+    Serial.println("[SECSTORE] Security records unchanged since boot; no NVS rewrite needed");
+    return;
+  }
+
+  Serial.println("[SECSTORE] Remote security records changed -> force NVS replacement");
+
+  struct ble_store_key_sec ourKey = {};
+  ourKey.peer_addr = our.peer_addr;
+  ourKey.idx = 0;
+
+  struct ble_store_key_sec peerKey = {};
+  peerKey.peer_addr = peer.peer_addr;
+  peerKey.idx = 0;
+
+  const int delOur = ble_store_delete_our_sec(&ourKey);
+  const int delPeer = ble_store_delete_peer_sec(&peerKey);
+
+  Serial.printf("[SECSTORE] delete old OUR rc=%d PEER rc=%d\n", delOur, delPeer);
+
+  const int writeOur = ble_store_write_our_sec(&our);
+  const int writePeer = ble_store_write_peer_sec(&peer);
+
+  Serial.printf("[SECSTORE] write new OUR rc=%d PEER rc=%d\n", writeOur, writePeer);
+
+  if (writeOur == 0 && writePeer == 0) {
+    remoteBootOurSec = our;
+    remoteBootPeerSec = peer;
+    remoteBootOurSecValid = true;
+    remoteBootPeerSecValid = true;
+    Serial.println("[SECSTORE] Remote security keys force-persisted to NVS");
+  } else {
+    Serial.println("[SECSTORE] WARNING: failed to force-persist one or more security records");
+  }
+}
+
 static bool hasOriginalRemoteBond() {
   const std::string remoteAddr = "18:70:3b:76:b8:45";
   const int count = NimBLEDevice::getNumBonds();
@@ -730,6 +834,7 @@ static void setupHonorBleKeyboard() {
   Serial.println("[BLE] Server auto-advertise-on-disconnect disabled");
   logBleBonds("boot");
   logRemoteSecurityStore("boot");
+  captureRemoteBootSecurityStore();
 
   hidDevice = new NimBLEHIDDevice(server);
   inputReport = hidDevice->getInputReport(1);
