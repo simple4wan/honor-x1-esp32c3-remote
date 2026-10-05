@@ -141,6 +141,17 @@ static bool remoteAdvHasMfg(const NimBLEAdvertisedDevice *device,
          (uint8_t)mfg[3] == b3;
 }
 
+static String bytesToHex(const uint8_t *data, size_t len) {
+  String out;
+  for (size_t i = 0; i < len; ++i) {
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%02X", data[i]);
+    if (i) out += " ";
+    out += buf;
+  }
+  return out;
+}
+
 static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
   const uint32_t now = millis();
   const uint32_t dt = remoteAdvLastAt ? (uint32_t)(now - remoteAdvLastAt) : 0;
@@ -175,6 +186,15 @@ static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
       device->getRSSI(),
       mfgHex.length() ? mfgHex.c_str() : "<none>",
       device->getServiceUUIDCount());
+  const auto& rawPayload = device->getPayload();
+  if (!rawPayload.empty()) {
+    String rawHex = bytesToHex(rawPayload.data(), rawPayload.size());
+    Serial.printf("[REMOTE-RAW] len=%u payload=%s\n",
+                  (unsigned)rawPayload.size(), rawHex.c_str());
+  } else {
+    Serial.println("[REMOTE-RAW] len=0 payload=<none>");
+  }
+
 
   if (device->haveServiceUUID()) {
     for (uint8_t i = 0; i < device->getServiceUUIDCount(); ++i) {
