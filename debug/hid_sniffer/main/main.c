@@ -464,11 +464,36 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
         const ble_addr_t *connect_addr = &event->disc.addr;
 #if MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
-        // After a bonded peer is resolved by the host, disc.addr may be the
-        // identity address while the controller still needs the current OTA
-        // address (RPA) for the actual connection attempt.
-        connect_addr = &event->disc.ota_addr;
+        // Some bonded legacy/public-address devices expose an empty ota_addr
+        // after host-side resolution. Use OTA only when it is actually valid.
+        bool ota_valid = false;
+        for (int i = 0; i < 6; i++) {
+            if (event->disc.ota_addr.val[i] != 0) {
+                ota_valid = true;
+                break;
+            }
+        }
+        if (ota_valid) {
+            connect_addr = &event->disc.ota_addr;
+        }
 #endif
+
+        // HDRC-BV1 uses a fixed public identity address. If host privacy
+        // resolution leaves both report addresses empty, fall back to it.
+        static const ble_addr_t hdrc_public_addr = {
+            .type = BLE_ADDR_PUBLIC,
+            .val = {0x45, 0xB8, 0x76, 0x3B, 0x70, 0x18}
+        };
+        bool addr_valid = false;
+        for (int i = 0; i < 6; i++) {
+            if (connect_addr->val[i] != 0) {
+                addr_valid = true;
+                break;
+            }
+        }
+        if (!addr_valid) {
+            connect_addr = &hdrc_public_addr;
+        }
 
         ESP_LOGI(TAG,
                  "Connect target type=%u addr=%02X:%02X:%02X:%02X:%02X:%02X",
