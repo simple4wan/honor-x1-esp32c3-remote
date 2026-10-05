@@ -29,12 +29,17 @@ static NimBLECharacteristic *outputReport5A = nullptr;
 static bool bleConnected = false;
 static SpanCharacteristic *homeKitActive = nullptr;
 
-// HomeKit RemoteKey has no explicit release event. Keep a key down briefly and
-// refresh the deadline when iOS repeats the same RemoteKey during a long press.
+// HomeKit RemoteKey has no explicit release event. iOS sends repeated
+// RemoteKey writes while the user keeps a button pressed. Detect the second
+// same-key write as the start of a real BLE HID hold, then keep the key down
+// until repeats stop.
 static bool homeKitKeyHeld = false;
 static uint8_t homeKitHeldKey = 0;
+static uint8_t homeKitLastTapKey = 0;
+static uint32_t homeKitLastTapAt = 0;
 static uint32_t homeKitKeyReleaseAt = 0;
-static constexpr uint32_t HOMEKIT_HOLD_RELEASE_MS = 260;
+static constexpr uint32_t HOMEKIT_REPEAT_DETECT_MS = 900;
+static constexpr uint32_t HOMEKIT_HOLD_RELEASE_MS = 700;
 
 static bool tvBondedThisBoot = false;
 static bool wakePulseActive = false;
@@ -443,22 +448,56 @@ static void queueHomeKitKey(uint8_t key) {
     return;
   }
 
-  if (homeKitKeyHeld && homeKitHeldKey != key) {
+  const uint32_t now = millis();
+
+  if (homeKitKeyHeld) {
+    if (homeKitHeldKey == key) {
+      // Same key repeated by iOS: keep the HID report continuously pressed.
+      homeKitKeyReleaseAt = now + HOMEKIT_HOLD_RELEASE_MS;
+      Serial.printf("[HK-HOLD] Extend held key 0x%02X\n", key);
+      return;
+    }
+
+    // A different key arrived while one is held.
     releaseHomeKitKey();
   }
 
-  if (!homeKitKeyHeld) {
+  const bool repeatedSameKey =
+      homeKitLastTapKey == key &&
+      (uint32_t)(now - homeKitLastTapAt) <= HOMEKIT_REPEAT_DETECT_MS;
+
+  if (repeatedSameKey) {
+    // Second same-key HomeKit event means the user is holding the button.
+    // From here onward emulate the original HDRC-BV1 exactly:
+    // send one press report, keep it down, and release only after repeats stop.
     uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
     inputReport->setValue(press, sizeof(press));
     inputReport->notify();
+
     homeKitKeyHeld = true;
     homeKitHeldKey = key;
-    Serial.printf("[HK-HOLD] Press key 0x%02X\n", key);
-  } else {
-    Serial.printf("[HK-HOLD] Extend key 0x%02X\n", key);
+    homeKitKeyReleaseAt = now + HOMEKIT_HOLD_RELEASE_MS;
+    homeKitLastTapKey = 0;
+    homeKitLastTapAt = 0;
+
+    Serial.printf("[HK-HOLD] Long press detected; hold key 0x%02X\n", key);
+    return;
   }
 
-  homeKitKeyReleaseAt = millis() + HOMEKIT_HOLD_RELEASE_MS;
+  // First event stays a normal short click so ordinary navigation remains fast.
+  uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
+  uint8_t release[8] = {0};
+
+  inputReport->setValue(press, sizeof(press));
+  inputReport->notify();
+  delay(90);
+  inputReport->setValue(release, sizeof(release));
+  inputReport->notify();
+
+  homeKitLastTapKey = key;
+  homeKitLastTapAt = now;
+
+  Serial.printf("[HK-HOLD] Tap key 0x%02X; waiting for repeat\n", key);
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
