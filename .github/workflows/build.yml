@@ -56,3 +56,31 @@ jobs:
           name: honor-x1-apple-remote-bridge
           path: artifacts/
           if-no-files-found: error
+
+
+      - name: Compile Relay Prototype
+        run: |
+          mkdir -p relay-build relay-artifacts
+          ./bin/arduino-cli compile \
+            --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs,CDCOnBoot=cdc" \
+            --output-dir relay-build \
+            relay_bridge
+
+          echo "Relay build output:"
+          find relay-build -maxdepth 1 -type f -printf '%f\n' | sort
+
+          RELAY_MERGED=$(find relay-build -maxdepth 1 -type f -name '*.merged.bin' | head -n1)
+          if [ -z "$RELAY_MERGED" ]; then
+            echo "No relay merged bin found"
+            exit 1
+          fi
+
+          cp "$RELAY_MERGED" relay-artifacts/honor-x1-relay-bridge.factory.bin
+          cp relay-build/*.bin relay-artifacts/ || true
+
+      - name: Upload relay firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: honor-x1-relay-bridge
+          path: relay-artifacts/
+          if-no-files-found: error
