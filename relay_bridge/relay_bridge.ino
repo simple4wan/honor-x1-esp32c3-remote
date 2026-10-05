@@ -101,6 +101,7 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
     NimBLEDevice::getScan()->stop();
     remoteAdv = device;
     remoteDoConnect = true;
+    Serial.println("[REMOTE] Connect scheduled");
   }
 
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
@@ -244,6 +245,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnected = false;
     Serial.printf("[BLE] TV disconnected, reason=%d\n", reason);
     configurePairingAdvertising();
+  }
+
+  void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
+    Serial.printf("[BLE] TV security encrypted=%d authenticated=%d bonded=%d peer=%s\n",
+                  connInfo.isEncrypted(), connInfo.isAuthenticated(), connInfo.isBonded(),
+                  connInfo.getAddress().toString().c_str());
   }
 };
 
@@ -454,13 +461,14 @@ void setup() {
     ->addLink(speaker);
 
   Serial.println("[HK] HomeKit Television ready");
-  Serial.println("[BLE] Pair 'HDRC-BV1-TEST' from the TV Bluetooth settings");
+  Serial.println("[BLE] TV side: ESP32 is advertising as HDRC-BV1 pairing mode");
 }
 
 void loop() {
   homeSpan.poll();
 
   if (remoteDoConnect) {
+    Serial.println("[REMOTE] Processing scheduled connect");
     remoteDoConnect = false;
     if (!connectOriginalRemote()) {
       delay(200);
