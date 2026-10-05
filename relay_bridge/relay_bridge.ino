@@ -301,7 +301,7 @@ static void logWakeDiagnostics() {
                   i, peer.toString().c_str(), peer.getType(), addrTypeName(peer.getType()));
   }
 
-  Serial.println("[WAKE-DIAG] target legacy ADV: connectable=yes scannable=no flags=0x04 interval=0x20..0x30");
+  Serial.println("[WAKE-DIAG] target legacy ADV_IND: conn_mode=UND disc_mode=NON flags=0x04 interval=0x20..0x30");
 }
 
 static void configureWakeAdvertising() {
@@ -335,11 +335,20 @@ static void configureWakeAdvertising() {
   advData.setManufacturerData(mfg);
 
   adv->stop();
+
+  // Original HDRC-BV1 wake capture was legacy event type 0 = ADV_IND:
+  // connectable undirected advertising, non-discoverable, Flags 0x04.
+  adv->setConnectableMode(BLE_GAP_CONN_MODE_UND);
+  adv->setDiscoverableMode(BLE_GAP_DISC_MODE_NON);
   adv->setAdvertisementData(advData);
   adv->enableScanResponse(false);
+  adv->setScanFilter(false, false);
   adv->setMinInterval(0x20);
   adv->setMaxInterval(0x30);
-  adv->start();
+
+  const bool advStarted = adv->start();
+  Serial.printf("[WAKE-DIAG] ADV_IND start=%d conn_mode=UND disc_mode=NON scan_rsp=0 filter=none\n",
+                advStarted);
 
   Serial.printf("[BLE] Wake ADV identity: %s type=%u(%s)\n",
                 ownAddr.toString().c_str(), ownAddr.getType(), addrTypeName(ownAddr.getType()));
