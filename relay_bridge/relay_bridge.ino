@@ -417,6 +417,12 @@ static void setupHonorBleKeyboard() {
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
 
+  // Own the post-disconnect advertising state machine ourselves.
+  // NimBLEServer otherwise restarts advertising AFTER onDisconnect(),
+  // which can overwrite the wake ADV configured in that callback.
+  server->advertiseOnDisconnect(false);
+  Serial.println("[BLE] Server auto-advertise-on-disconnect disabled");
+
   hidDevice = new NimBLEHIDDevice(server);
   inputReport = hidDevice->getInputReport(1);
   inputReport5A = hidDevice->getInputReport(0x5A);
