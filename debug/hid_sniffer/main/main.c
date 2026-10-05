@@ -461,9 +461,25 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         }
 
         ESP_LOGI(TAG, "Found %s RSSI=%d", TARGET_NAME, event->disc.rssi);
+
+        const ble_addr_t *connect_addr = &event->disc.addr;
+#if MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
+        // After a bonded peer is resolved by the host, disc.addr may be the
+        // identity address while the controller still needs the current OTA
+        // address (RPA) for the actual connection attempt.
+        connect_addr = &event->disc.ota_addr;
+#endif
+
+        ESP_LOGI(TAG,
+                 "Connect target type=%u addr=%02X:%02X:%02X:%02X:%02X:%02X",
+                 connect_addr->type,
+                 connect_addr->val[5], connect_addr->val[4],
+                 connect_addr->val[3], connect_addr->val[2],
+                 connect_addr->val[1], connect_addr->val[0]);
+
         ble_gap_disc_cancel();
 
-        int rc = ble_gap_connect(own_addr_type, &event->disc.addr, 30000,
+        int rc = ble_gap_connect(own_addr_type, connect_addr, 30000,
                                  NULL, gap_event, NULL);
         if (rc != 0) {
             ESP_LOGE(TAG, "Connect failed to start rc=%d", rc);
