@@ -37,6 +37,14 @@ static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
 static uint32_t remoteAdvLastAt = 0;
 static uint32_t remoteAdvSeq = 0;
+static bool remoteObserveActive = false;
+static uint32_t remoteObserveStartAt = 0;
+static uint32_t remoteObserveLastAt = 0;
+static uint32_t remoteObserveCount = 0;
+static uint32_t remoteObserveMinDt = 0xFFFFFFFF;
+static uint32_t remoteObserveMaxDt = 0;
+static uint64_t remoteObserveSumDt = 0;
+static uint32_t remoteObserveDtSamples = 0;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
@@ -94,6 +102,7 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
     remoteConnected = false;
     remoteReport1 = nullptr;
     remoteDoConnect = false;
+    remoteObserveActive = false;
     remoteRetryAt = millis() + 3000;
     Serial.printf("[REMOTE] Disconnected reason=%d; retry in 3000 ms\n", reason);
   }
@@ -173,22 +182,43 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
 
     logRemoteAdvertisement(device);
 
-    NimBLEDevice::getScan()->stop();
     remoteAdv = device;
 
-    // NimBLE-Arduino may expose a bonded peer's resolved scan address as
-    // 00:00:00:00:00:00. The HDRC-BV1 has a fixed public identity, so fall
-    // back to it exactly like the verified native NimBLE sniffer does.
-    if (device->getAddress().isNull()) {
-      remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
-      Serial.println("[REMOTE] Scan address is null; fallback to 18:70:3B:76:B8:45");
-    } else {
-      remoteConnectAddr = device->getAddress();
+    // Observe repeated advertisements for 2 seconds before attempting a
+    // connection. This reveals whether a normal button press / Home+Menu
+    // produces a fast advertising burst.
+    const uint32_t now = millis();
+
+    if (!remoteObserveActive) {
+      remoteObserveActive = true;
+      remoteObserveStartAt = now;
+      remoteObserveLastAt = now;
+      remoteObserveCount = 1;
+      remoteObserveMinDt = 0xFFFFFFFF;
+      remoteObserveMaxDt = 0;
+      remoteObserveSumDt = 0;
+      remoteObserveDtSamples = 0;
+
+      if (device->getAddress().isNull()) {
+        remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+        Serial.println("[REMOTE] Scan address is null; fallback to 18:70:3B:76:B8:45");
+      } else {
+        remoteConnectAddr = device->getAddress();
+      }
+
+      Serial.println("[REMOTE-OBS] Begin 2000 ms observation window; no connect yet");
+      return;
     }
 
-    remoteDoConnect = true;
-    Serial.printf("[REMOTE] Connect scheduled target=%s\n",
-                  remoteConnectAddr.toString().c_str());
+    const uint32_t advDt = now - remoteObserveLastAt;
+    remoteObserveLastAt = now;
+    ++remoteObserveCount;
+    if (advDt) {
+      if (advDt < remoteObserveMinDt) remoteObserveMinDt = advDt;
+      if (advDt > remoteObserveMaxDt) remoteObserveMaxDt = advDt;
+      remoteObserveSumDt += advDt;
+      ++remoteObserveDtSamples;
+    }
   }
 
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
@@ -311,7 +341,9 @@ static void startOriginalRemoteScan() {
   remoteRetryAt = 0;
 
   NimBLEScan *scan = NimBLEDevice::getScan();
-  scan->setScanCallbacks(&remoteScanCallbacks, false);
+  // We need duplicate advertisements to measure the HDRC-BV1 burst interval.
+  scan->setScanCallbacks(&remoteScanCallbacks, true);
+  scan->setDuplicateFilter(0);
   scan->setInterval(100);
   scan->setWindow(80);
   scan->setActiveScan(true);
@@ -759,6 +791,27 @@ void loop() {
       Serial.println("[WAKE] Wake pulse expired -> restore pairing ADV");
       configurePairingAdvertising();
     }
+  }
+
+  if (remoteObserveActive &&
+      (uint32_t)(millis() - remoteObserveStartAt) >= 2000) {
+    const uint32_t avgDt = remoteObserveDtSamples
+                               ? (uint32_t)(remoteObserveSumDt / remoteObserveDtSamples)
+                               : 0;
+
+    Serial.printf(
+        "[REMOTE-OBS] Done count=%lu samples=%lu minDt=%lu ms maxDt=%lu ms avgDt=%lu ms\n",
+        (unsigned long)remoteObserveCount,
+        (unsigned long)remoteObserveDtSamples,
+        (unsigned long)(remoteObserveMinDt == 0xFFFFFFFF ? 0 : remoteObserveMinDt),
+        (unsigned long)remoteObserveMaxDt,
+        (unsigned long)avgDt);
+
+    remoteObserveActive = false;
+    remoteDoConnect = true;
+    NimBLEDevice::getScan()->stop();
+    Serial.printf("[REMOTE] Observation complete; connect scheduled target=%s\n",
+                  remoteConnectAddr.toString().c_str());
   }
 
   if (remoteDoConnect) {
