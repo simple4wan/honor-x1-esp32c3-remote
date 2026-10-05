@@ -183,6 +183,12 @@ static bool connectOriginalRemote() {
     return false;
   }
 
+  // The original remote sometimes accepts the ACL connection while still
+  // waking from a low-power state, then times out if SMP/encryption starts
+  // immediately. Give it a short settling window before restoring the bond.
+  Serial.println("[REMOTE] Connected; wait 500 ms before security restore");
+  delay(500);
+
   if (!remoteClient->secureConnection()) {
     Serial.printf("[REMOTE] secureConnection failed lastError=%d\n",
                   remoteClient->getLastError());
