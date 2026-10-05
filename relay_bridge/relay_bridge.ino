@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "HomeSpan.h"
 #include <NimBLEDevice.h>
+#include "host/ble_store.h"
 #include <NimBLEHIDDevice.h>
 
 // Relay prototype: ESP32 is simultaneously a HID peripheral for the TV
@@ -56,6 +57,7 @@ static void requestWakePulse();
 static void startOriginalRemoteScan();
 static bool hasOriginalRemoteBond();
 static void logBleBonds(const char *tag);
+static void logRemoteSecurityStore(const char *tag);
 static void releaseDeferredTvAdvertising(const char *reason);
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
@@ -136,6 +138,7 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
 
     remoteSecurityReady = info.isEncrypted();
     logBleBonds(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
+    logRemoteSecurityStore(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
 
     if (info.isEncrypted()) {
       releaseDeferredTvAdvertising("original remote security restored");
@@ -317,6 +320,7 @@ static bool connectOriginalRemote() {
                 remoteConnectAddr.toString().c_str(),
                 hasOriginalRemoteBond(),
                 NimBLEDevice::getNumBonds());
+  logRemoteSecurityStore("before remote connect");
   // Skip MTU exchange during connect; HDRC-BV1 reports are only 8 bytes.
   // This reduces radio/control traffic while TV + remote links coexist.
   if (!remoteClient->connect(remoteConnectAddr, true, false, false)) {
@@ -418,6 +422,40 @@ static void startOriginalRemoteScan() {
   scan->setActiveScan(true);
   scan->start(0, false, true);
   Serial.println("[REMOTE] Scanning for original HDRC-BV1");
+}
+
+static void logRemoteSecurityStore(const char *tag) {
+  const NimBLEAddress remote("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+
+  struct ble_store_key_sec key = {};
+  key.peer_addr = *remote.getBase();
+  key.idx = 0;
+
+  struct ble_store_value_sec our = {};
+  struct ble_store_value_sec peer = {};
+
+  const int ourRc = ble_store_read_our_sec(&key, &our);
+  const int peerRc = ble_store_read_peer_sec(&key, &peer);
+
+  Serial.printf("[SECSTORE] %s OUR rc=%d ltk=%d ediv=%u rand=%llu keySize=%u auth=%d sc=%d bondCount=%u\n",
+                tag, ourRc,
+                ourRc == 0 ? our.ltk_present : 0,
+                ourRc == 0 ? our.ediv : 0,
+                (unsigned long long)(ourRc == 0 ? our.rand_num : 0),
+                ourRc == 0 ? our.key_size : 0,
+                ourRc == 0 ? our.authenticated : 0,
+                ourRc == 0 ? our.sc : 0,
+                ourRc == 0 ? our.bond_count : 0);
+
+  Serial.printf("[SECSTORE] %s PEER rc=%d ltk=%d ediv=%u rand=%llu keySize=%u auth=%d sc=%d bondCount=%u\n",
+                tag, peerRc,
+                peerRc == 0 ? peer.ltk_present : 0,
+                peerRc == 0 ? peer.ediv : 0,
+                (unsigned long long)(peerRc == 0 ? peer.rand_num : 0),
+                peerRc == 0 ? peer.key_size : 0,
+                peerRc == 0 ? peer.authenticated : 0,
+                peerRc == 0 ? peer.sc : 0,
+                peerRc == 0 ? peer.bond_count : 0);
 }
 
 static bool hasOriginalRemoteBond() {
@@ -691,6 +729,7 @@ static void setupHonorBleKeyboard() {
   server->advertiseOnDisconnect(false);
   Serial.println("[BLE] Server auto-advertise-on-disconnect disabled");
   logBleBonds("boot");
+  logRemoteSecurityStore("boot");
 
   hidDevice = new NimBLEHIDDevice(server);
   inputReport = hidDevice->getInputReport(1);
