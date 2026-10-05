@@ -150,9 +150,43 @@ static bool connectOriginalRemote() {
     return false;
   }
 
-  remoteReport1 = hid->getCharacteristic(NimBLEUUID((uint16_t)0x2A4D));
+  remoteReport1 = nullptr;
+
+  // HDRC-BV1 has several characteristics with the same UUID 0x2A4D.
+  // Select the keyboard input report by reading descriptor 0x2908:
+  //   [0x01, 0x01] = Report ID 1, Input.
+  const auto& reportChars = hid->getCharacteristics(true);
+  for (auto *chr : reportChars) {
+    if (!chr || chr->getUUID() != NimBLEUUID((uint16_t)0x2A4D)) continue;
+
+    NimBLERemoteDescriptor *ref =
+        chr->getDescriptor(NimBLEUUID((uint16_t)0x2908));
+    if (!ref) {
+      Serial.printf("[REMOTE] 0x2A4D handle=0x%04X has no Report Reference\n",
+                    chr->getHandle());
+      continue;
+    }
+
+    NimBLEAttValue v = ref->readValue();
+    if (v.size() < 2) {
+      Serial.printf("[REMOTE] 0x2A4D handle=0x%04X bad Report Reference len=%u\n",
+                    chr->getHandle(), (unsigned)v.size());
+      continue;
+    }
+
+    const uint8_t reportId = v.data()[0];
+    const uint8_t reportType = v.data()[1];
+    Serial.printf("[REMOTE] Report char handle=0x%04X id=%u type=%u notify=%d\n",
+                  chr->getHandle(), reportId, reportType, chr->canNotify());
+
+    if (reportId == 1 && reportType == 1) {
+      remoteReport1 = chr;
+      break;
+    }
+  }
+
   if (!remoteReport1) {
-    Serial.println("[REMOTE] Report characteristic 0x2A4D not found");
+    Serial.println("[REMOTE] Report ID 1 input characteristic not found");
     remoteClient->disconnect();
     return false;
   }
@@ -165,7 +199,8 @@ static bool connectOriginalRemote() {
   }
 
   remoteConnected = true;
-  Serial.println("[REMOTE] Report ID 1 subscribed; physical remote relay ready");
+  Serial.printf("[REMOTE] Report ID 1 subscribed handle=0x%04X; physical remote relay ready\n",
+                remoteReport1->getHandle());
   return true;
 }
 
