@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Preferences.h>
 #include "HomeSpan.h"
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
@@ -60,6 +61,7 @@ static void configureBondedIdleAdvertising();
 static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
+static void oneTimeResetOriginalRemoteBond();
 static bool hasOriginalRemoteBond();
 static void logBleBonds(const char *tag);
 
@@ -452,6 +454,44 @@ static void startOriginalRemoteScan() {
   Serial.println("[REMOTE] Scanning for original HDRC-BV1");
 }
 
+static void oneTimeResetOriginalRemoteBond() {
+  Preferences prefs;
+  prefs.begin("honor-relay", false);
+
+  const bool alreadyDone = prefs.getBool("remote-rst-v1", false);
+  if (alreadyDone) {
+    Serial.println("[BOND-RESET] One-time original remote bond reset already completed; skip");
+    prefs.end();
+    return;
+  }
+
+  logBleBonds("before one-time remote reset");
+
+  const NimBLEAddress remoteAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+  if (!NimBLEDevice::isBonded(remoteAddr)) {
+    Serial.println("[BOND-RESET] Original remote bond not present; mark reset complete");
+    prefs.putBool("remote-rst-v1", true);
+    prefs.end();
+    logBleBonds("after one-time remote reset");
+    return;
+  }
+
+  const bool ok = NimBLEDevice::deleteBond(remoteAddr);
+  Serial.printf("[BOND-RESET] Delete original remote 18:70:3B:76:B8:45 -> %s\n",
+                ok ? "SUCCESS" : "FAILED");
+
+  logBleBonds("after one-time remote reset");
+
+  if (ok && !NimBLEDevice::isBonded(remoteAddr)) {
+    prefs.putBool("remote-rst-v1", true);
+    Serial.println("[BOND-RESET] Reset marker saved; future boots will NOT delete the new remote bond");
+  } else {
+    Serial.println("[BOND-RESET] Reset marker NOT saved because deletion was not confirmed");
+  }
+
+  prefs.end();
+}
+
 static bool hasOriginalRemoteBond() {
   const std::string remoteAddr = "18:70:3b:76:b8:45";
   const int count = NimBLEDevice::getNumBonds();
@@ -713,6 +753,10 @@ static void setupHonorBleKeyboard() {
 
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+  // Diagnostic build: delete ONLY the original physical remote bond once.
+  // TV bond, HomeKit pairing, Wi-Fi and all other NVS data are preserved.
+  oneTimeResetOriginalRemoteBond();
 
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
