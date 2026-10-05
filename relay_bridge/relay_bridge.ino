@@ -35,6 +35,8 @@ static uint32_t wakePulseUntil = 0;
 static bool remoteConnected = false;
 static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
+static uint32_t remoteAdvLastAt = 0;
+static uint32_t remoteAdvSeq = 0;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
@@ -108,6 +110,11 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
 };
 
 static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
+  const uint32_t now = millis();
+  const uint32_t dt = remoteAdvLastAt ? (uint32_t)(now - remoteAdvLastAt) : 0;
+  remoteAdvLastAt = now;
+  ++remoteAdvSeq;
+
   std::string mfg = device->haveManufacturerData()
                       ? device->getManufacturerData()
                       : std::string();
@@ -121,8 +128,10 @@ static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
   }
 
   Serial.printf(
-      "[REMOTE-ADV] addr=%s addrType=%u advType=%u legacy=%d conn=%d scan=%d flags=0x%02X "
+      "[REMOTE-ADV] seq=%lu dt=%lu ms addr=%s addrType=%u advType=%u legacy=%d conn=%d scan=%d flags=0x%02X "
       "name=%s RSSI=%d mfg=%s uuids=%u\n",
+      (unsigned long)remoteAdvSeq,
+      (unsigned long)dt,
       device->getAddress().toString().c_str(),
       device->getAddressType(),
       device->getAdvType(),
