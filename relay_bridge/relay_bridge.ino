@@ -31,6 +31,7 @@ static bool tvBondedThisBoot = false;
 static bool remoteConnected = false;
 static bool remoteDoConnect = false;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
+static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
 static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
 
@@ -114,10 +115,23 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
                   addr.c_str(),
                   device->haveName() ? device->getName().c_str() : "<none>",
                   device->getRSSI());
+
     NimBLEDevice::getScan()->stop();
     remoteAdv = device;
+
+    // NimBLE-Arduino may expose a bonded peer's resolved scan address as
+    // 00:00:00:00:00:00. The HDRC-BV1 has a fixed public identity, so fall
+    // back to it exactly like the verified native NimBLE sniffer does.
+    if (device->getAddress().isNull()) {
+      remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+      Serial.println("[REMOTE] Scan address is null; fallback to 18:70:3B:76:B8:45");
+    } else {
+      remoteConnectAddr = device->getAddress();
+    }
+
     remoteDoConnect = true;
-    Serial.println("[REMOTE] Connect scheduled");
+    Serial.printf("[REMOTE] Connect scheduled target=%s\n",
+                  remoteConnectAddr.toString().c_str());
   }
 
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
@@ -132,7 +146,7 @@ static RemoteScanCallbacks remoteScanCallbacks;
 static bool connectOriginalRemote() {
   if (!remoteAdv) return false;
 
-  remoteClient = NimBLEDevice::getClientByPeerAddress(remoteAdv->getAddress());
+  remoteClient = NimBLEDevice::getClientByPeerAddress(remoteConnectAddr);
   if (!remoteClient) remoteClient = NimBLEDevice::getDisconnectedClient();
 
   if (!remoteClient) {
@@ -147,8 +161,8 @@ static bool connectOriginalRemote() {
   }
 
   Serial.printf("[REMOTE] Connecting to %s\n",
-                remoteAdv->getAddress().toString().c_str());
-  if (!remoteClient->connect(remoteAdv)) {
+                remoteConnectAddr.toString().c_str());
+  if (!remoteClient->connect(remoteConnectAddr)) {
     Serial.println("[REMOTE] connect failed");
     return false;
   }
