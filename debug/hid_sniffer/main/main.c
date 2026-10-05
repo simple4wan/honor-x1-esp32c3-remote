@@ -12,6 +12,7 @@
 #include "host/ble_uuid.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "host/ble_store.h"
 
 static const char *TAG = "HONOR_X1";
 static const char *TARGET_NAME = "HDRC-BV1";
@@ -60,9 +61,20 @@ static void discover_hid(void);
 static void discover_identity(void);
 static void read_next_identity(void);
 static void discover_hid_chrs(void);
+static void log_bond_state(const char *where);
 static void discover_next_report_dscs(void);
 static void configure_next_report(void);
 static int write_cccd_cb(uint16_t ch, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg);
+
+static void log_bond_state(const char *where)
+{
+    int our_sec = 0;
+    int peer_sec = 0;
+    int rc1 = ble_store_util_count(BLE_STORE_OBJ_TYPE_OUR_SEC, &our_sec);
+    int rc2 = ble_store_util_count(BLE_STORE_OBJ_TYPE_PEER_SEC, &peer_sec);
+    ESP_LOGI(TAG, "BOND STATE [%s]: our_sec=%d(rc=%d) peer_sec=%d(rc=%d)",
+             where, our_sec, rc1, peer_sec, rc2);
+}
 
 static void print_mbuf(const struct os_mbuf *om)
 {
@@ -467,6 +479,20 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
         conn_handle = event->connect.conn_handle;
         ESP_LOGI(TAG, "Connected conn_handle=%u", conn_handle);
+        {
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(conn_handle, &desc) == 0) {
+                ESP_LOGI(TAG,
+                         "LINK BEFORE SECURITY: encrypted=%d authenticated=%d bonded=%d peer_id=%02X:%02X:%02X:%02X:%02X:%02X",
+                         desc.sec_state.encrypted,
+                         desc.sec_state.authenticated,
+                         desc.sec_state.bonded,
+                         desc.peer_id_addr.val[5], desc.peer_id_addr.val[4],
+                         desc.peer_id_addr.val[3], desc.peer_id_addr.val[2],
+                         desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
+            }
+        }
+        log_bond_state("connect");
 
         {
             int rc = ble_gap_security_initiate(conn_handle);
@@ -484,9 +510,23 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         }
         return 0;
 
-    case BLE_GAP_EVENT_ENC_CHANGE:
+    case BLE_GAP_EVENT_ENC_CHANGE: {
         ESP_LOGI(TAG, "Encryption change status=%d", event->enc_change.status);
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->enc_change.conn_handle, &desc) == 0) {
+            ESP_LOGI(TAG,
+                     "LINK AFTER SECURITY: encrypted=%d authenticated=%d bonded=%d key_size=%d",
+                     desc.sec_state.encrypted,
+                     desc.sec_state.authenticated,
+                     desc.sec_state.bonded,
+                     desc.sec_state.key_size);
+        }
+        log_bond_state("enc_change");
+        if (event->enc_change.status == 0) {
+            ESP_LOGI(TAG, "=== BOND TEST SUCCESS PATH: reboot ESP32, do NOT press Home+Menu, then press any remote key ===");
+        }
         return 0;
+    }
 
     case BLE_GAP_EVENT_PASSKEY_ACTION:
         ESP_LOGI(TAG, "Pairing action=%d", event->passkey.params.action);
@@ -516,6 +556,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGW(TAG, "Disconnected reason=%d", event->disconnect.reason);
+        log_bond_state("disconnect");
         conn_handle = BLE_HS_CONN_HANDLE_NONE;
         hid_start = hid_end = 0;
         start_scan();
@@ -563,6 +604,9 @@ static void on_sync(void)
         ESP_LOGE(TAG, "ble_hs_id_infer_auto failed rc=%d", rc);
         return;
     }
+    log_bond_state("boot/sync");
+    ESP_LOGI(TAG, "If first pairing: hold HOME + MENU on HDRC-BV1 until it enters pairing mode.");
+    ESP_LOGI(TAG, "After encrypted/bonded success: reboot ESP32 and test reconnect without HOME + MENU.");
     start_scan();
 }
 
