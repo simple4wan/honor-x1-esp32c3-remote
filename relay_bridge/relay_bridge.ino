@@ -34,6 +34,7 @@ static bool wakePulseActive = false;
 static uint32_t wakePulseUntil = 0;
 static bool remoteConnected = false;
 static bool remoteDoConnect = false;
+static uint32_t remoteRetryAt = 0;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
@@ -90,8 +91,9 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
   void onDisconnect(NimBLEClient *client, int reason) override {
     remoteConnected = false;
     remoteReport1 = nullptr;
-    Serial.printf("[REMOTE] Disconnected reason=%d\n", reason);
-    NimBLEDevice::getScan()->start(0, false, true);
+    remoteDoConnect = false;
+    remoteRetryAt = millis() + 1500;
+    Serial.printf("[REMOTE] Disconnected reason=%d; retry in 1500 ms\n", reason);
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& info) override {
@@ -164,20 +166,28 @@ static bool connectOriginalRemote() {
       return false;
     }
     remoteClient->setClientCallbacks(&remoteClientCallbacks, false);
-    remoteClient->setConnectionParams(16, 24, 0, 300);
+    // HID traffic is tiny; favor link robustness over aggressive timeout.
+    // Supervision timeout unit is 10 ms: 1000 = 10 seconds.
+    remoteClient->setConnectionParams(16, 24, 0, 1000);
     remoteClient->setConnectTimeout(10000);
+    remoteClient->setConnectRetries(2);
   }
 
   Serial.printf("[REMOTE] Connecting to %s\n",
                 remoteConnectAddr.toString().c_str());
-  if (!remoteClient->connect(remoteConnectAddr)) {
+  // Skip MTU exchange during connect; HDRC-BV1 reports are only 8 bytes.
+  // This reduces radio/control traffic while TV + remote links coexist.
+  if (!remoteClient->connect(remoteConnectAddr, true, false, false)) {
     Serial.println("[REMOTE] connect failed");
+    remoteRetryAt = millis() + 1500;
     return false;
   }
 
   if (!remoteClient->secureConnection()) {
-    Serial.println("[REMOTE] secureConnection failed");
-    remoteClient->disconnect();
+    Serial.printf("[REMOTE] secureConnection failed lastError=%d\n",
+                  remoteClient->getLastError());
+    remoteRetryAt = millis() + 1500;
+    if (remoteClient->isConnected()) remoteClient->disconnect();
     return false;
   }
 
@@ -244,6 +254,8 @@ static bool connectOriginalRemote() {
 
 static void startOriginalRemoteScan() {
   if (remoteConnected || remoteDoConnect) return;
+  if (remoteRetryAt && (int32_t)(millis() - remoteRetryAt) < 0) return;
+  remoteRetryAt = 0;
 
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setScanCallbacks(&remoteScanCallbacks, false);
@@ -700,8 +712,12 @@ void loop() {
     Serial.println("[REMOTE] Processing scheduled connect");
     remoteDoConnect = false;
     if (!connectOriginalRemote()) {
-      delay(200);
-      startOriginalRemoteScan();
+      if (!remoteRetryAt) remoteRetryAt = millis() + 1500;
     }
+  }
+
+  if (!remoteConnected && !remoteDoConnect &&
+      remoteRetryAt && (int32_t)(millis() - remoteRetryAt) >= 0) {
+    startOriginalRemoteScan();
   }
 }
