@@ -13,7 +13,8 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "host/ble_store.h"
-#include "store/config/ble_store_config.h"
+
+void ble_store_config_init(void);
 
 static const char *TAG = "HONOR_X1";
 static const char *TARGET_NAME = "HDRC-BV1";
