@@ -13,6 +13,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "host/ble_store.h"
+#include "store/config/ble_store_config.h"
 
 static const char *TAG = "HONOR_X1";
 static const char *TARGET_NAME = "HDRC-BV1";
@@ -635,6 +636,10 @@ void app_main(void)
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    // Persist NimBLE bonding keys in NVS so the HDRC-BV1 remains bonded after reboot.
+    ble_store_config_init();
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
