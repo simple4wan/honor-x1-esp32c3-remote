@@ -35,15 +35,8 @@ static bool wakePulseActive = false;
 static uint32_t wakePulseUntil = 0;
 static bool remoteConnected = false;
 static bool remoteSecurityReady = false;
-static bool tvAdvertisingDeferredForRemote = false;
-static uint32_t tvAdvertisingDeferUntil = 0;
 static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
-static uint32_t remoteAdvLastAt = 0;
-static uint32_t remoteAdvSeq = 0;
-static uint32_t remoteAdvLastLogAt = 0;
-static uint32_t remoteAdvLastSignature = 0xFFFFFFFF;
-static bool remoteAdvVerboseThisPacket = true;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
@@ -60,11 +53,8 @@ static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
 static bool hasOriginalRemoteBond();
-static void logBleBonds(const char *tag);
-static void logRemoteSecurityStore(const char *tag);
 static void captureRemoteBootSecurityStore();
 static void forcePersistRemoteSecurityIfChanged();
-static void releaseDeferredTvAdvertising(const char *reason);
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -82,16 +72,10 @@ static void relayRemoteReport(NimBLERemoteCharacteristic *chr, uint8_t *data,
     return;
   }
 
-  Serial.printf("[RELAY] RPT1 %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                data[0], data[1], data[2], data[3],
-                data[4], data[5], data[6], data[7]);
-
   if (!bleConnected || !inputReport) {
     if (len >= 3 && data[2] == 0x66) {
       Serial.println("[RELAY] Power pressed while TV disconnected -> wake pulse");
       requestWakePulse();
-    } else {
-      Serial.println("[RELAY] TV not connected; report not forwarded");
     }
     return;
   }
@@ -100,32 +84,15 @@ static void relayRemoteReport(NimBLERemoteCharacteristic *chr, uint8_t *data,
   inputReport->notify();
 }
 
-static void releaseDeferredTvAdvertising(const char *reason) {
-  if (!tvAdvertisingDeferredForRemote) return;
-
-  tvAdvertisingDeferredForRemote = false;
-  Serial.printf("[BLE] Release deferred TV advertising: %s\n", reason);
-
-  if (hasTvBond()) {
-    configureBondedIdleAdvertising();
-  } else {
-    configurePairingAdvertising();
-  }
-}
-
 class RemoteClientCallbacks : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient *client) override {
     remoteConnected = true;
     remoteSecurityReady = false;
-    Serial.printf("[REMOTE] Connected: %s\n",
-                  client->getPeerAddress().toString().c_str());
-
-    // Bonded HDRC-BV1 reconnect appears timing-sensitive. Start encryption
-    // immediately from the GAP connect callback instead of waiting for
-    // synchronous connect() to return to the Arduino loop.
+    // Start bonded encryption immediately; HDRC-BV1 reconnect is timing-sensitive.
     const bool securityStarted = client->secureConnection(true);
-    Serial.printf("[REMOTE] Immediate async security start=%d lastError=%d\n",
-                  securityStarted, client->getLastError());
+    if (!securityStarted) {
+      Serial.printf("[REMOTE] Security start failed lastError=%d\n", client->getLastError());
+    }
   }
 
   void onDisconnect(NimBLEClient *client, int reason) override {
@@ -138,19 +105,15 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& info) override {
-    Serial.printf("[REMOTE] Security encrypted=%d bonded=%d peer=%s\n",
-                  info.isEncrypted(), info.isBonded(),
-                  info.getAddress().toString().c_str());
-
     remoteSecurityReady = info.isEncrypted();
-    logBleBonds(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
-    logRemoteSecurityStore(info.isEncrypted() ? "after remote auth success" : "after remote auth failure");
 
     if (info.isEncrypted()) {
+      Serial.printf("[REMOTE] Security restored bonded=%d peer=%s\n",
+                    info.isBonded(), info.getAddress().toString().c_str());
       forcePersistRemoteSecurityIfChanged();
-      releaseDeferredTvAdvertising("original remote security restored");
-    }
-    if (!info.isEncrypted()) {
+    } else {
+      Serial.printf("[REMOTE] Security failed peer=%s\n",
+                    info.getAddress().toString().c_str());
       NimBLEClient *client = NimBLEDevice::getClientByHandle(info.getConnHandle());
       if (client) client->disconnect();
     }
@@ -168,72 +131,6 @@ static bool remoteAdvHasMfg(const NimBLEAdvertisedDevice *device,
          (uint8_t)mfg[3] == b3;
 }
 
-static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
-  const uint32_t now = millis();
-  const uint32_t dt = remoteAdvLastAt ? (uint32_t)(now - remoteAdvLastAt) : 0;
-  remoteAdvLastAt = now;
-  ++remoteAdvSeq;
-
-  std::string mfg = device->haveManufacturerData()
-                      ? device->getManufacturerData()
-                      : std::string();
-
-  const uint8_t m0 = mfg.size() > 0 ? (uint8_t)mfg[0] : 0;
-  const uint8_t m1 = mfg.size() > 1 ? (uint8_t)mfg[1] : 0;
-  const uint8_t m2 = mfg.size() > 2 ? (uint8_t)mfg[2] : 0;
-  const uint8_t m3 = mfg.size() > 3 ? (uint8_t)mfg[3] : 0;
-
-  const uint32_t signature =
-      ((uint32_t)device->getAdvType() << 24) |
-      ((uint32_t)device->getAdvFlags() << 16) |
-      ((uint32_t)(device->isConnectable() ? 1 : 0) << 15) |
-      ((uint32_t)m2 << 8) |
-      (uint32_t)m3;
-
-  // Home+Menu can produce tens of duplicate advertisements per second.
-  // Print immediately when the state changes, otherwise at most once/second.
-  remoteAdvVerboseThisPacket =
-      signature != remoteAdvLastSignature ||
-      (uint32_t)(now - remoteAdvLastLogAt) >= 1000;
-
-  if (!remoteAdvVerboseThisPacket) return;
-
-  remoteAdvLastSignature = signature;
-  remoteAdvLastLogAt = now;
-
-  String mfgHex;
-  for (size_t i = 0; i < mfg.size(); ++i) {
-    char buf[4];
-    snprintf(buf, sizeof(buf), "%02X", (uint8_t)mfg[i]);
-    if (i) mfgHex += " ";
-    mfgHex += buf;
-  }
-
-  Serial.printf(
-      "[REMOTE-ADV] seq=%lu dt=%lu ms addr=%s addrType=%u advType=%u legacy=%d conn=%d scan=%d flags=0x%02X "
-      "name=%s RSSI=%d mfg=%s uuids=%u\n",
-      (unsigned long)remoteAdvSeq,
-      (unsigned long)dt,
-      device->getAddress().toString().c_str(),
-      device->getAddressType(),
-      device->getAdvType(),
-      device->isLegacyAdvertisement(),
-      device->isConnectable(),
-      device->isScannable(),
-      device->getAdvFlags(),
-      device->haveName() ? device->getName().c_str() : "<none>",
-      device->getRSSI(),
-      mfgHex.length() ? mfgHex.c_str() : "<none>",
-      device->getServiceUUIDCount());
-
-  if (device->haveServiceUUID()) {
-    for (uint8_t i = 0; i < device->getServiceUUIDCount(); ++i) {
-      Serial.printf("[REMOTE-ADV] uuid[%u]=%s\n",
-                    i, device->getServiceUUID(i).toString().c_str());
-    }
-  }
-}
-
 static RemoteClientCallbacks remoteClientCallbacks;
 
 class RemoteScanCallbacks : public NimBLEScanCallbacks {
@@ -248,50 +145,26 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
     // reconnect/wake. Its fixed public address is the authoritative match.
     if (!targetAddr && !targetName) return;
 
-    logRemoteAdvertisement(device);
-
-    if (remoteAdvVerboseThisPacket) {
-      Serial.printf("[REMOTE] Found original HDRC-BV1 %s name=%s RSSI=%d\n",
-                    addr.c_str(),
-                    device->haveName() ? device->getName().c_str() : "<none>",
-                    device->getRSSI());
-    }
+    // Never connect from the remote's non-connectable wake/status advertisements.
+    if (!device->isConnectable()) return;
 
     const bool mfg0400 = remoteAdvHasMfg(device, 0x02, 0x7D, 0x04, 0x00);
     const bool mfg0411 = remoteAdvHasMfg(device, 0x02, 0x7D, 0x04, 0x11);
-
-    // advType=3 seen from HDRC-BV1 is non-connectable (conn=0). Never try
-    // to connect to the fixed public address just because we saw this packet.
-    if (!device->isConnectable()) {
-      if (remoteAdvVerboseThisPacket) {
-        Serial.println("[REMOTE] Ignore non-connectable HDRC-BV1 advertisement");
-      }
-      return;
-    }
-
-    if (remoteAdvVerboseThisPacket) {
-      if (mfg0400) {
-        Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 00");
-      } else if (mfg0411) {
-        Serial.println("[REMOTE] Connectable state: MFG 02 7D 04 11");
-      } else {
-        Serial.println("[REMOTE] Connectable state: other manufacturer payload");
-      }
-    }
+    Serial.printf("[REMOTE] Found connectable HDRC-BV1 RSSI=%d state=%s\n",
+                  device->getRSSI(),
+                  mfg0400 ? "04 00" : (mfg0411 ? "04 11" : "other"));
 
     remoteAdv = device;
 
     if (device->getAddress().isNull()) {
       remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
-      Serial.println("[REMOTE] Scan address is null; fallback to 18:70:3B:76:B8:45");
     } else {
       remoteConnectAddr = device->getAddress();
     }
 
     NimBLEDevice::getScan()->stop();
     remoteDoConnect = true;
-    Serial.printf("[REMOTE] Connect scheduled target=%s\n",
-                  remoteConnectAddr.toString().c_str());
+
   }
 
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
@@ -323,11 +196,7 @@ static bool connectOriginalRemote() {
     remoteClient->setConnectRetries(2);
   }
 
-  Serial.printf("[REMOTE] Connecting to %s remoteBond=%d totalBonds=%d\n",
-                remoteConnectAddr.toString().c_str(),
-                hasOriginalRemoteBond(),
-                NimBLEDevice::getNumBonds());
-  logRemoteSecurityStore("before remote connect");
+  Serial.printf("[REMOTE] Connecting bonded=%d\n", hasOriginalRemoteBond());
   // Skip MTU exchange during connect; HDRC-BV1 reports are only 8 bytes.
   // This reduces radio/control traffic while TV + remote links coexist.
   if (!remoteClient->connect(remoteConnectAddr, true, false, false)) {
@@ -388,9 +257,6 @@ static bool connectOriginalRemote() {
 
     const uint8_t reportId = v.data()[0];
     const uint8_t reportType = v.data()[1];
-    Serial.printf("[REMOTE] Report char handle=0x%04X id=%u type=%u notify=%d\n",
-                  chr->getHandle(), reportId, reportType, chr->canNotify());
-
     if (reportId == 1 && reportType == 1) {
       remoteReport1 = chr;
       break;
@@ -411,8 +277,7 @@ static bool connectOriginalRemote() {
   }
 
   remoteConnected = true;
-  Serial.printf("[REMOTE] Report ID 1 subscribed handle=0x%04X; physical remote relay ready\n",
-                remoteReport1->getHandle());
+  Serial.println("[REMOTE] Physical remote relay ready");
   return true;
 }
 
@@ -428,41 +293,6 @@ static void startOriginalRemoteScan() {
   scan->setWindow(80);
   scan->setActiveScan(true);
   scan->start(0, false, true);
-  Serial.println("[REMOTE] Scanning for original HDRC-BV1");
-}
-
-static void logRemoteSecurityStore(const char *tag) {
-  const NimBLEAddress remote("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
-
-  struct ble_store_key_sec key = {};
-  key.peer_addr = *remote.getBase();
-  key.idx = 0;
-
-  struct ble_store_value_sec our = {};
-  struct ble_store_value_sec peer = {};
-
-  const int ourRc = ble_store_read_our_sec(&key, &our);
-  const int peerRc = ble_store_read_peer_sec(&key, &peer);
-
-  Serial.printf("[SECSTORE] %s OUR rc=%d ltk=%d ediv=%u rand=%llu keySize=%u auth=%d sc=%d bondCount=%u\n",
-                tag, ourRc,
-                ourRc == 0 ? our.ltk_present : 0,
-                ourRc == 0 ? our.ediv : 0,
-                (unsigned long long)(ourRc == 0 ? our.rand_num : 0),
-                ourRc == 0 ? our.key_size : 0,
-                ourRc == 0 ? our.authenticated : 0,
-                ourRc == 0 ? our.sc : 0,
-                ourRc == 0 ? our.bond_count : 0);
-
-  Serial.printf("[SECSTORE] %s PEER rc=%d ltk=%d ediv=%u rand=%llu keySize=%u auth=%d sc=%d bondCount=%u\n",
-                tag, peerRc,
-                peerRc == 0 ? peer.ltk_present : 0,
-                peerRc == 0 ? peer.ediv : 0,
-                (unsigned long long)(peerRc == 0 ? peer.rand_num : 0),
-                peerRc == 0 ? peer.key_size : 0,
-                peerRc == 0 ? peer.authenticated : 0,
-                peerRc == 0 ? peer.sc : 0,
-                peerRc == 0 ? peer.bond_count : 0);
 }
 
 static bool readRemoteSecurityStore(struct ble_store_value_sec *our,
@@ -487,12 +317,11 @@ static void captureRemoteBootSecurityStore() {
     remoteBootPeerSec = peer;
     remoteBootOurSecValid = true;
     remoteBootPeerSecValid = true;
-    Serial.printf("[SECSTORE] boot snapshot captured OUR bondCount=%u PEER bondCount=%u\n",
-                  our.bond_count, peer.bond_count);
+
   } else {
     remoteBootOurSecValid = false;
     remoteBootPeerSecValid = false;
-    Serial.println("[SECSTORE] boot snapshot unavailable");
+    Serial.println("[SECSTORE] WARNING: remote security snapshot unavailable");
   }
 }
 
@@ -526,12 +355,8 @@ static void forcePersistRemoteSecurityIfChanged() {
       secRecordChanged(our, remoteBootOurSec) ||
       secRecordChanged(peer, remoteBootPeerSec);
 
-  if (!changed) {
-    Serial.println("[SECSTORE] Security records unchanged since boot; no NVS rewrite needed");
-    return;
-  }
+  if (!changed) return;
 
-  Serial.println("[SECSTORE] Remote security records changed -> force NVS replacement");
 
   struct ble_store_key_sec ourKey = {};
   ourKey.peer_addr = our.peer_addr;
@@ -544,21 +369,18 @@ static void forcePersistRemoteSecurityIfChanged() {
   const int delOur = ble_store_delete_our_sec(&ourKey);
   const int delPeer = ble_store_delete_peer_sec(&peerKey);
 
-  Serial.printf("[SECSTORE] delete old OUR rc=%d PEER rc=%d\n", delOur, delPeer);
-
   const int writeOur = ble_store_write_our_sec(&our);
   const int writePeer = ble_store_write_peer_sec(&peer);
-
-  Serial.printf("[SECSTORE] write new OUR rc=%d PEER rc=%d\n", writeOur, writePeer);
 
   if (writeOur == 0 && writePeer == 0) {
     remoteBootOurSec = our;
     remoteBootPeerSec = peer;
     remoteBootOurSecValid = true;
     remoteBootPeerSecValid = true;
-    Serial.println("[SECSTORE] Remote security keys force-persisted to NVS");
+    Serial.println("[SECSTORE] Updated physical-remote security keys persisted to NVS");
   } else {
-    Serial.println("[SECSTORE] WARNING: failed to force-persist one or more security records");
+    Serial.printf("[SECSTORE] WARNING: NVS key refresh incomplete delOUR=%d delPEER=%d writeOUR=%d writePEER=%d\n",
+                  delOur, delPeer, writeOur, writePeer);
   }
 }
 
@@ -574,24 +396,6 @@ static bool hasOriginalRemoteBond() {
     }
   }
   return false;
-}
-
-static void logBleBonds(const char *tag) {
-  const int count = NimBLEDevice::getNumBonds();
-  Serial.printf("[BOND] %s count=%d remotePresent=%d\n",
-                tag, count, hasOriginalRemoteBond());
-
-  for (int i = 0; i < count; ++i) {
-    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
-    Serial.printf("[BOND] #%d %s type=%u%s\n",
-                  i,
-                  peer.toString().c_str(),
-                  peer.getType(),
-                  (peer.toString() == "18:70:3b:76:b8:45" ||
-                   peer.toString() == "18:70:3B:76:B8:45")
-                      ? " (original remote)"
-                      : "");
-  }
 }
 
 static bool hasTvBond() {
@@ -832,9 +636,11 @@ static void setupHonorBleKeyboard() {
   // which can overwrite the wake ADV configured in that callback.
   server->advertiseOnDisconnect(false);
   Serial.println("[BLE] Server auto-advertise-on-disconnect disabled");
-  logBleBonds("boot");
-  logRemoteSecurityStore("boot");
   captureRemoteBootSecurityStore();
+  Serial.printf("[BLE] Bonds=%d remote=%d tv=%d\n",
+                NimBLEDevice::getNumBonds(),
+                hasOriginalRemoteBond(),
+                hasTvBond());
 
   hidDevice = new NimBLEHIDDevice(server);
   inputReport = hidDevice->getInputReport(1);
@@ -872,21 +678,9 @@ static void setupHonorBleKeyboard() {
   hidDevice->setBatteryLevel(100);
 
   server->start();
-
-  // On reboot, the TV and original remote can both reconnect immediately.
-  // The remote's bonded security restore is timing-sensitive and repeatedly
-  // times out if the TV establishes its peripheral connection at the same time.
-  // Give the original remote exclusive BLE reconnect priority for a short window.
-  if (hasOriginalRemoteBond()) {
-    tvAdvertisingDeferredForRemote = true;
-    tvAdvertisingDeferUntil = millis() + 6000;
-    NimBLEDevice::getAdvertising()->stop();
-    Serial.println("[BLE] TV advertising deferred up to 6000 ms; restore original remote bond first");
-  } else if (hasTvBond()) {
-    Serial.println("[BLE] Existing TV bond detected -> start bonded idle ADV");
+  if (hasTvBond()) {
     configureBondedIdleAdvertising();
   } else {
-    Serial.println("[BLE] No TV bond detected -> start pairing ADV");
     configurePairingAdvertising();
   }
 }
@@ -1003,17 +797,14 @@ void setup() {
   WiFi.onEvent(wifiEventLogger);
 
   Serial.println();
-  Serial.println("Honor X1 Apple Remote Bridge");
-  Serial.println("----------------------------");
-  Serial.println("HomeKit default setup code: 466-37-726");
-  Serial.println("Change it later from HomeSpan CLI with: S <8-digit-code>");
+  Serial.println("Honor X1 HomeKit BLE Relay");
 
   setupHonorBleKeyboard();
 
   // First-time remote pairing: hold HOME+MENU on the original HDRC-BV1.
   startOriginalRemoteScan();
 
-  homeSpan.setLogLevel(1);
+  homeSpan.setLogLevel(0);
   // Give ESP32-C3 enough time to associate and complete DHCP before retrying.
   // HomeSpan Setup AP otherwise retries WiFi.begin() too aggressively on some APs.
   homeSpan.setConnectionTimes(15, 60, 3);
@@ -1042,14 +833,6 @@ void setup() {
 void loop() {
   homeSpan.poll();
 
-  if (tvAdvertisingDeferredForRemote &&
-      !remoteSecurityReady &&
-      !remoteConnected &&
-      !remoteDoConnect &&
-      (int32_t)(millis() - tvAdvertisingDeferUntil) >= 0) {
-    releaseDeferredTvAdvertising("remote reconnect grace period expired");
-  }
-
   if (wakePulseActive && !bleConnected &&
       (int32_t)(millis() - wakePulseUntil) >= 0) {
     wakePulseActive = false;
@@ -1063,7 +846,6 @@ void loop() {
   }
 
   if (remoteDoConnect) {
-    Serial.println("[REMOTE] Processing scheduled connect");
     remoteDoConnect = false;
     if (!connectOriginalRemote()) {
       if (!remoteRetryAt) remoteRetryAt = millis() + 3000;
