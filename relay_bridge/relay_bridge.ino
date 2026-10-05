@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <Preferences.h>
 #include "HomeSpan.h"
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
@@ -42,14 +41,6 @@ static uint32_t remoteAdvSeq = 0;
 static uint32_t remoteAdvLastLogAt = 0;
 static uint32_t remoteAdvLastSignature = 0xFFFFFFFF;
 static bool remoteAdvVerboseThisPacket = true;
-static bool remoteObserveActive = false;
-static uint32_t remoteObserveStartAt = 0;
-static uint32_t remoteObserveLastAt = 0;
-static uint32_t remoteObserveCount = 0;
-static uint32_t remoteObserveMinDt = 0xFFFFFFFF;
-static uint32_t remoteObserveMaxDt = 0;
-static uint64_t remoteObserveSumDt = 0;
-static uint32_t remoteObserveDtSamples = 0;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
 static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
@@ -61,7 +52,6 @@ static void configureBondedIdleAdvertising();
 static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
-static void oneTimeResetOriginalRemoteBond();
 static bool hasOriginalRemoteBond();
 static void logBleBonds(const char *tag);
 
@@ -119,7 +109,6 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
     remoteSecurityReady = false;
     remoteReport1 = nullptr;
     remoteDoConnect = false;
-    remoteObserveActive = false;
     remoteRetryAt = millis() + 3000;
     Serial.printf("[REMOTE] Disconnected reason=%d; retry in 3000 ms\n", reason);
   }
@@ -147,17 +136,6 @@ static bool remoteAdvHasMfg(const NimBLEAdvertisedDevice *device,
          (uint8_t)mfg[1] == b1 &&
          (uint8_t)mfg[2] == b2 &&
          (uint8_t)mfg[3] == b3;
-}
-
-static String bytesToHex(const uint8_t *data, size_t len) {
-  String out;
-  for (size_t i = 0; i < len; ++i) {
-    char buf[4];
-    snprintf(buf, sizeof(buf), "%02X", data[i]);
-    if (i) out += " ";
-    out += buf;
-  }
-  return out;
 }
 
 static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
@@ -218,13 +196,6 @@ static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
       mfgHex.length() ? mfgHex.c_str() : "<none>",
       device->getServiceUUIDCount());
 
-  const auto& rawPayload = device->getPayload();
-  if (!rawPayload.empty()) {
-    String rawHex = bytesToHex(rawPayload.data(), rawPayload.size());
-    Serial.printf("[REMOTE-RAW] len=%u payload=%s\n",
-                  (unsigned)rawPayload.size(), rawHex.c_str());
-  }
-
   if (device->haveServiceUUID()) {
     for (uint8_t i = 0; i < device->getServiceUUIDCount(); ++i) {
       Serial.printf("[REMOTE-ADV] uuid[%u]=%s\n",
@@ -280,41 +251,17 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
 
     remoteAdv = device;
 
-    // Observe repeated advertisements for 2 seconds before attempting a
-    // connection. This reveals whether a normal button press / Home+Menu
-    // produces a fast advertising burst.
-    const uint32_t now = millis();
-
-    if (!remoteObserveActive) {
-      remoteObserveActive = true;
-      remoteObserveStartAt = now;
-      remoteObserveLastAt = now;
-      remoteObserveCount = 1;
-      remoteObserveMinDt = 0xFFFFFFFF;
-      remoteObserveMaxDt = 0;
-      remoteObserveSumDt = 0;
-      remoteObserveDtSamples = 0;
-
-      if (device->getAddress().isNull()) {
-        remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
-        Serial.println("[REMOTE] Scan address is null; fallback to 18:70:3B:76:B8:45");
-      } else {
-        remoteConnectAddr = device->getAddress();
-      }
-
-      Serial.println("[REMOTE-OBS] Begin 2000 ms observation window; no connect yet");
-      return;
+    if (device->getAddress().isNull()) {
+      remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+      Serial.println("[REMOTE] Scan address is null; fallback to 18:70:3B:76:B8:45");
+    } else {
+      remoteConnectAddr = device->getAddress();
     }
 
-    const uint32_t advDt = now - remoteObserveLastAt;
-    remoteObserveLastAt = now;
-    ++remoteObserveCount;
-    if (advDt) {
-      if (advDt < remoteObserveMinDt) remoteObserveMinDt = advDt;
-      if (advDt > remoteObserveMaxDt) remoteObserveMaxDt = advDt;
-      remoteObserveSumDt += advDt;
-      ++remoteObserveDtSamples;
-    }
+    NimBLEDevice::getScan()->stop();
+    remoteDoConnect = true;
+    Serial.printf("[REMOTE] Connect scheduled target=%s\n",
+                  remoteConnectAddr.toString().c_str());
   }
 
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
@@ -444,52 +391,13 @@ static void startOriginalRemoteScan() {
   remoteRetryAt = 0;
 
   NimBLEScan *scan = NimBLEDevice::getScan();
-  // We need duplicate advertisements to measure the HDRC-BV1 burst interval.
-  scan->setScanCallbacks(&remoteScanCallbacks, true);
-  scan->setDuplicateFilter(0);
+  scan->setScanCallbacks(&remoteScanCallbacks, false);
+  scan->setDuplicateFilter(1);
   scan->setInterval(100);
   scan->setWindow(80);
   scan->setActiveScan(true);
   scan->start(0, false, true);
   Serial.println("[REMOTE] Scanning for original HDRC-BV1");
-}
-
-static void oneTimeResetOriginalRemoteBond() {
-  Preferences prefs;
-  prefs.begin("honor-relay", false);
-
-  const bool alreadyDone = prefs.getBool("remote-rst-v1", false);
-  if (alreadyDone) {
-    Serial.println("[BOND-RESET] One-time original remote bond reset already completed; skip");
-    prefs.end();
-    return;
-  }
-
-  logBleBonds("before one-time remote reset");
-
-  const NimBLEAddress remoteAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
-  if (!NimBLEDevice::isBonded(remoteAddr)) {
-    Serial.println("[BOND-RESET] Original remote bond not present; mark reset complete");
-    prefs.putBool("remote-rst-v1", true);
-    prefs.end();
-    logBleBonds("after one-time remote reset");
-    return;
-  }
-
-  const bool ok = NimBLEDevice::deleteBond(remoteAddr);
-  Serial.printf("[BOND-RESET] Delete original remote 18:70:3B:76:B8:45 -> %s\n",
-                ok ? "SUCCESS" : "FAILED");
-
-  logBleBonds("after one-time remote reset");
-
-  if (ok && !NimBLEDevice::isBonded(remoteAddr)) {
-    prefs.putBool("remote-rst-v1", true);
-    Serial.println("[BOND-RESET] Reset marker saved; future boots will NOT delete the new remote bond");
-  } else {
-    Serial.println("[BOND-RESET] Reset marker NOT saved because deletion was not confirmed");
-  }
-
-  prefs.end();
 }
 
 static bool hasOriginalRemoteBond() {
@@ -754,10 +662,6 @@ static void setupHonorBleKeyboard() {
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
-  // Diagnostic build: delete ONLY the original physical remote bond once.
-  // TV bond, HomeKit pairing, Wi-Fi and all other NVS data are preserved.
-  oneTimeResetOriginalRemoteBond();
-
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
 
@@ -969,27 +873,6 @@ void loop() {
       Serial.println("[WAKE] Wake pulse expired -> restore pairing ADV");
       configurePairingAdvertising();
     }
-  }
-
-  if (remoteObserveActive &&
-      (uint32_t)(millis() - remoteObserveStartAt) >= 2000) {
-    const uint32_t avgDt = remoteObserveDtSamples
-                               ? (uint32_t)(remoteObserveSumDt / remoteObserveDtSamples)
-                               : 0;
-
-    Serial.printf(
-        "[REMOTE-OBS] Done count=%lu samples=%lu minDt=%lu ms maxDt=%lu ms avgDt=%lu ms\n",
-        (unsigned long)remoteObserveCount,
-        (unsigned long)remoteObserveDtSamples,
-        (unsigned long)(remoteObserveMinDt == 0xFFFFFFFF ? 0 : remoteObserveMinDt),
-        (unsigned long)remoteObserveMaxDt,
-        (unsigned long)avgDt);
-
-    remoteObserveActive = false;
-    remoteDoConnect = true;
-    NimBLEDevice::getScan()->stop();
-    Serial.printf("[REMOTE] Observation complete; connect scheduled target=%s\n",
-                  remoteConnectAddr.toString().c_str());
   }
 
   if (remoteDoConnect) {
