@@ -364,8 +364,8 @@ static void requestWakePulse() {
   Serial.println("[WAKE] Normal ADV -> transient wake ADV");
   configureWakeAdvertising();
   wakePulseActive = true;
-  wakePulseUntil = millis() + 2000;
-  Serial.println("[WAKE] Wake pulse armed for 2000 ms");
+  wakePulseUntil = millis() + 8000;
+  Serial.println("[WAKE] Wake pulse armed for 8000 ms");
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
