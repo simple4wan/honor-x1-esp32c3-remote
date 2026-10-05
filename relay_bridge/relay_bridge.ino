@@ -757,7 +757,12 @@ struct HonorTelevision : Service::Television {
         if (wantOn) {
           Serial.println("[HK] Ignore duplicate ON while TV BLE is connected");
         } else {
+          Serial.println("[HK] OFF -> Power, Right, OK shutdown macro");
           sendHonorKey(HONOR_POWER);
+          delay(900);
+          sendHonorKey(HONOR_RIGHT);
+          delay(250);
+          sendHonorKey(HONOR_OK);
         }
       } else {
         if (wantOn) {
