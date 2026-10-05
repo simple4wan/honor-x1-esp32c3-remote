@@ -76,6 +76,17 @@ jobs:
           fi
 
           cp "$RELAY_MERGED" relay-artifacts/honor-x1-relay-bridge.factory.bin
+
+          RELAY_APP=$(find relay-build -maxdepth 1 -type f -name '*.ino.bin' | head -n1)
+          if [ -z "$RELAY_APP" ]; then
+            RELAY_APP=$(find relay-build -maxdepth 1 -type f -name '*.bin' ! -name '*.bootloader.bin' ! -name '*.partitions.bin' ! -name '*.merged.bin' | head -n1)
+          fi
+          if [ -z "$RELAY_APP" ]; then
+            echo "No relay application bin found"
+            exit 1
+          fi
+
+          cp "$RELAY_APP" relay-artifacts/honor-x1-relay-bridge.update.bin
           cp relay-build/*.bin relay-artifacts/ || true
 
       - name: Upload relay firmware
