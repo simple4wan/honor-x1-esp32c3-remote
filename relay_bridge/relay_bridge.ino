@@ -33,6 +33,7 @@ static bool tvBondedThisBoot = false;
 static bool wakePulseActive = false;
 static uint32_t wakePulseUntil = 0;
 static bool remoteConnected = false;
+static bool remoteSecurityReady = false;
 static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
 static uint32_t remoteAdvLastAt = 0;
@@ -94,12 +95,21 @@ static void relayRemoteReport(NimBLERemoteCharacteristic *chr, uint8_t *data,
 class RemoteClientCallbacks : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient *client) override {
     remoteConnected = true;
+    remoteSecurityReady = false;
     Serial.printf("[REMOTE] Connected: %s\n",
                   client->getPeerAddress().toString().c_str());
+
+    // Bonded HDRC-BV1 reconnect appears timing-sensitive. Start encryption
+    // immediately from the GAP connect callback instead of waiting for
+    // synchronous connect() to return to the Arduino loop.
+    const bool securityStarted = client->secureConnection(true);
+    Serial.printf("[REMOTE] Immediate async security start=%d lastError=%d\n",
+                  securityStarted, client->getLastError());
   }
 
   void onDisconnect(NimBLEClient *client, int reason) override {
     remoteConnected = false;
+    remoteSecurityReady = false;
     remoteReport1 = nullptr;
     remoteDoConnect = false;
     remoteObserveActive = false;
@@ -111,6 +121,8 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
     Serial.printf("[REMOTE] Security encrypted=%d bonded=%d peer=%s\n",
                   info.isEncrypted(), info.isBonded(),
                   info.getAddress().toString().c_str());
+
+    remoteSecurityReady = info.isEncrypted();
     if (!info.isEncrypted()) {
       NimBLEClient *client = NimBLEDevice::getClientByHandle(info.getConnHandle());
       if (client) client->disconnect();
@@ -289,19 +301,24 @@ static bool connectOriginalRemote() {
     return false;
   }
 
-  // The original remote sometimes accepts the ACL connection while still
-  // waking from a low-power state, then times out if SMP/encryption starts
-  // immediately. Give it a short settling window before restoring the bond.
-  Serial.println("[REMOTE] Connected; wait 500 ms before security restore");
-  delay(500);
+  // Security was started asynchronously inside onConnect(), at the earliest
+  // possible point. Wait here only for the authentication callback/result.
+  const uint32_t securityWaitStart = millis();
+  while (remoteClient->isConnected() && !remoteSecurityReady &&
+         (uint32_t)(millis() - securityWaitStart) < 5000) {
+    delay(10);
+  }
 
-  if (!remoteClient->secureConnection()) {
-    Serial.printf("[REMOTE] secureConnection failed lastError=%d\n",
-                  remoteClient->getLastError());
+  if (!remoteClient->isConnected() || !remoteSecurityReady) {
+    Serial.printf("[REMOTE] Immediate security did not complete; connected=%d lastError=%d\n",
+                  remoteClient->isConnected(), remoteClient->getLastError());
     remoteRetryAt = millis() + 3000;
     if (remoteClient->isConnected()) remoteClient->disconnect();
     return false;
   }
+
+  Serial.printf("[REMOTE] Immediate security ready after %lu ms\n",
+                (unsigned long)(millis() - securityWaitStart));
 
   NimBLERemoteService *hid = remoteClient->getService(NimBLEUUID((uint16_t)0x1812));
   if (!hid) {
