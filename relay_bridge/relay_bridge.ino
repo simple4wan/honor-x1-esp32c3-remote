@@ -29,18 +29,6 @@ static NimBLECharacteristic *outputReport5A = nullptr;
 static bool bleConnected = false;
 static SpanCharacteristic *homeKitActive = nullptr;
 
-// HomeKit RemoteKey has no explicit release event. iOS sends repeated
-// RemoteKey writes while the user keeps a button pressed. Detect the second
-// same-key write as the start of a real BLE HID hold, then keep the key down
-// until repeats stop.
-static bool homeKitKeyHeld = false;
-static uint8_t homeKitHeldKey = 0;
-static uint8_t homeKitLastTapKey = 0;
-static uint32_t homeKitLastTapAt = 0;
-static uint32_t homeKitKeyReleaseAt = 0;
-static constexpr uint32_t HOMEKIT_REPEAT_DETECT_MS = 900;
-static constexpr uint32_t HOMEKIT_HOLD_RELEASE_MS = 700;
-
 static bool tvBondedThisBoot = false;
 static bool wakePulseActive = false;
 static uint32_t wakePulseUntil = 0;
@@ -57,8 +45,6 @@ static void configureBondedIdleAdvertising();
 static bool hasTvBond();
 static void requestWakePulse();
 static void startOriginalRemoteScan();
-static void queueHomeKitKey(uint8_t key);
-static void releaseHomeKitKey();
 
 // Exact keyboard-style report format observed from HDRC-BV1-TEST:
 // [modifier, reserved, key1, key2, key3, key4, key5, key6]
@@ -429,77 +415,6 @@ static void requestWakePulse() {
 }
 
 
-static void releaseHomeKitKey() {
-  if (!homeKitKeyHeld || !inputReport) return;
-
-  uint8_t release[8] = {0};
-  inputReport->setValue(release, sizeof(release));
-  inputReport->notify();
-
-  Serial.printf("[HK-HOLD] Release key 0x%02X\n", homeKitHeldKey);
-  homeKitKeyHeld = false;
-  homeKitHeldKey = 0;
-  homeKitKeyReleaseAt = 0;
-}
-
-static void queueHomeKitKey(uint8_t key) {
-  if (!bleConnected || !inputReport) {
-    Serial.printf("[BLE] Not connected; key 0x%02X ignored\n", key);
-    return;
-  }
-
-  const uint32_t now = millis();
-
-  if (homeKitKeyHeld) {
-    if (homeKitHeldKey == key) {
-      // Same key repeated by iOS: keep the HID report continuously pressed.
-      homeKitKeyReleaseAt = now + HOMEKIT_HOLD_RELEASE_MS;
-      Serial.printf("[HK-HOLD] Extend held key 0x%02X\n", key);
-      return;
-    }
-
-    // A different key arrived while one is held.
-    releaseHomeKitKey();
-  }
-
-  const bool repeatedSameKey =
-      homeKitLastTapKey == key &&
-      (uint32_t)(now - homeKitLastTapAt) <= HOMEKIT_REPEAT_DETECT_MS;
-
-  if (repeatedSameKey) {
-    // Second same-key HomeKit event means the user is holding the button.
-    // From here onward emulate the original HDRC-BV1 exactly:
-    // send one press report, keep it down, and release only after repeats stop.
-    uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
-    inputReport->setValue(press, sizeof(press));
-    inputReport->notify();
-
-    homeKitKeyHeld = true;
-    homeKitHeldKey = key;
-    homeKitKeyReleaseAt = now + HOMEKIT_HOLD_RELEASE_MS;
-    homeKitLastTapKey = 0;
-    homeKitLastTapAt = 0;
-
-    Serial.printf("[HK-HOLD] Long press detected; hold key 0x%02X\n", key);
-    return;
-  }
-
-  // First event stays a normal short click so ordinary navigation remains fast.
-  uint8_t press[8] = {0, 0, key, 0, 0, 0, 0, 0};
-  uint8_t release[8] = {0};
-
-  inputReport->setValue(press, sizeof(press));
-  inputReport->notify();
-  delay(90);
-  inputReport->setValue(release, sizeof(release));
-  inputReport->notify();
-
-  homeKitLastTapKey = key;
-  homeKitLastTapAt = now;
-
-  Serial.printf("[HK-HOLD] Tap key 0x%02X; waiting for repeat\n", key);
-}
-
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo) override {
     bleConnected = true;
@@ -517,7 +432,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
   void onDisconnect(NimBLEServer *server, NimBLEConnInfo& connInfo, int reason) override {
     bleConnected = false;
-    releaseHomeKitKey();
     if (homeKitActive) {
       homeKitActive->setVal(0);
       Serial.println("[HK] Active synced -> OFF (TV BLE disconnected)");
@@ -680,14 +594,14 @@ struct HonorTelevision : Service::Television {
       const int key = remoteKey->getNewVal();
       Serial.printf("[HK] RemoteKey=%d\n", key);
       switch (key) {
-        case 4:  queueHomeKitKey(HONOR_UP); break;
-        case 5:  queueHomeKitKey(HONOR_DOWN); break;
-        case 6:  queueHomeKitKey(HONOR_LEFT); break;
-        case 7:  queueHomeKitKey(HONOR_RIGHT); break;
-        case 8:  queueHomeKitKey(HONOR_OK); break;
-        case 9:  queueHomeKitKey(HONOR_BACK); break;
-        case 11: queueHomeKitKey(HONOR_HOME); break; // temporary mapping
-        case 15: queueHomeKitKey(HONOR_MENU); break; // Info -> Menu
+        case 4:  sendHonorKey(HONOR_UP); break;
+        case 5:  sendHonorKey(HONOR_DOWN); break;
+        case 6:  sendHonorKey(HONOR_LEFT); break;
+        case 7:  sendHonorKey(HONOR_RIGHT); break;
+        case 8:  sendHonorKey(HONOR_OK); break;
+        case 9:  sendHonorKey(HONOR_BACK); break;
+        case 11: sendHonorKey(HONOR_HOME); break; // temporary mapping
+        case 15: sendHonorKey(HONOR_MENU); break; // Info -> Menu
         default:
           Serial.printf("[HK] Unmapped RemoteKey=%d\n", key);
           break;
@@ -746,34 +660,29 @@ void setup() {
   // HomeSpan Setup AP otherwise retries WiFi.begin() too aggressively on some APs.
   homeSpan.setConnectionTimes(15, 60, 3);
   homeSpan.enableAutoStartAP();
-  homeSpan.begin(Category::Television, "Honor X1");
+  homeSpan.begin(Category::Television, "荣耀智慧屏");
 
   SPAN_ACCESSORY();
 
   // A minimal input source helps iOS treat this as a real Television accessory.
   SpanService *input = new Service::InputSource();
-  new Characteristic::ConfiguredName("Honor X1");
+  new Characteristic::ConfiguredName("荣耀智慧屏");
   new Characteristic::Identifier(1);
   new Characteristic::IsConfigured(1);
   new Characteristic::CurrentVisibilityState(0);
 
   HonorSpeaker *speaker = new HonorSpeaker();
 
-  (new HonorTelevision("Honor X1"))
+  (new HonorTelevision("荣耀智慧屏"))
     ->addLink(input)
     ->addLink(speaker);
 
-  Serial.println("[HK] HomeKit Television ready");
+  Serial.println("[HK] 荣耀智慧屏 HomeKit Television ready");
   Serial.println("[BLE] TV side: ESP32 HDRC-BV1 advertising state ready");
 }
 
 void loop() {
   homeSpan.poll();
-
-  if (homeKitKeyHeld && bleConnected &&
-      (int32_t)(millis() - homeKitKeyReleaseAt) >= 0) {
-    releaseHomeKitKey();
-  }
 
   if (wakePulseActive && !bleConnected &&
       (int32_t)(millis() - wakePulseUntil) >= 0) {
