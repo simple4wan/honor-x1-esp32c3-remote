@@ -92,8 +92,8 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
     remoteConnected = false;
     remoteReport1 = nullptr;
     remoteDoConnect = false;
-    remoteRetryAt = millis() + 1500;
-    Serial.printf("[REMOTE] Disconnected reason=%d; retry in 1500 ms\n", reason);
+    remoteRetryAt = millis() + 3000;
+    Serial.printf("[REMOTE] Disconnected reason=%d; retry in 3000 ms\n", reason);
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& info) override {
@@ -106,6 +106,42 @@ class RemoteClientCallbacks : public NimBLEClientCallbacks {
     }
   }
 };
+
+static void logRemoteAdvertisement(const NimBLEAdvertisedDevice *device) {
+  std::string mfg = device->haveManufacturerData()
+                      ? device->getManufacturerData()
+                      : std::string();
+
+  String mfgHex;
+  for (size_t i = 0; i < mfg.size(); ++i) {
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%02X", (uint8_t)mfg[i]);
+    if (i) mfgHex += " ";
+    mfgHex += buf;
+  }
+
+  Serial.printf(
+      "[REMOTE-ADV] addr=%s addrType=%u advType=%u legacy=%d conn=%d scan=%d flags=0x%02X "
+      "name=%s RSSI=%d mfg=%s uuids=%u\n",
+      device->getAddress().toString().c_str(),
+      device->getAddressType(),
+      device->getAdvType(),
+      device->isLegacyAdvertisement(),
+      device->isConnectable(),
+      device->isScannable(),
+      device->getAdvFlags(),
+      device->haveName() ? device->getName().c_str() : "<none>",
+      device->getRSSI(),
+      mfgHex.length() ? mfgHex.c_str() : "<none>",
+      device->getServiceUUIDCount());
+
+  if (device->haveServiceUUID()) {
+    for (uint8_t i = 0; i < device->getServiceUUIDCount(); ++i) {
+      Serial.printf("[REMOTE-ADV] uuid[%u]=%s\n",
+                    i, device->getServiceUUID(i).toString().c_str());
+    }
+  }
+}
 
 static RemoteClientCallbacks remoteClientCallbacks;
 
@@ -125,6 +161,8 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
                   addr.c_str(),
                   device->haveName() ? device->getName().c_str() : "<none>",
                   device->getRSSI());
+
+    logRemoteAdvertisement(device);
 
     NimBLEDevice::getScan()->stop();
     remoteAdv = device;
@@ -179,7 +217,7 @@ static bool connectOriginalRemote() {
   // This reduces radio/control traffic while TV + remote links coexist.
   if (!remoteClient->connect(remoteConnectAddr, true, false, false)) {
     Serial.println("[REMOTE] connect failed");
-    remoteRetryAt = millis() + 1500;
+    remoteRetryAt = millis() + 3000;
     return false;
   }
 
@@ -192,7 +230,7 @@ static bool connectOriginalRemote() {
   if (!remoteClient->secureConnection()) {
     Serial.printf("[REMOTE] secureConnection failed lastError=%d\n",
                   remoteClient->getLastError());
-    remoteRetryAt = millis() + 1500;
+    remoteRetryAt = millis() + 3000;
     if (remoteClient->isConnected()) remoteClient->disconnect();
     return false;
   }
@@ -718,7 +756,7 @@ void loop() {
     Serial.println("[REMOTE] Processing scheduled connect");
     remoteDoConnect = false;
     if (!connectOriginalRemote()) {
-      if (!remoteRetryAt) remoteRetryAt = millis() + 1500;
+      if (!remoteRetryAt) remoteRetryAt = millis() + 3000;
     }
   }
 
