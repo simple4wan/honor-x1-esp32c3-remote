@@ -1,12 +1,16 @@
-# Honor X1 HomeKit BLE Relay
+# Honor X1 Smart Home BLE Bridge
 
-把 **荣耀智慧屏 X1** 接入 Apple HomeKit，并让它可以直接使用 iPhone 控制中心里的 **Apple TV Remote**。
+一个基于 **ESP32-C3** 的荣耀智慧屏 X1 智能家居 BLE 桥接项目。
 
-同时保留原装蓝牙遥控器，ESP32-C3 在中间同时扮演：
+当前已经实现 Apple HomeKit 原生接入，并可直接使用 iPhone 控制中心里的 **Apple TV Remote**。同时保留原装蓝牙遥控器，通过 ESP32-C3 中继给电视。
+
+由于底层已经完成了荣耀电视的 BLE HID、唤醒、Bond、状态同步和实体遥控器中继，后续接入 **Home Assistant / MQTT / HTTP / ESPHome 风格控制层**也比较容易，核心电视控制逻辑无需重做。
+
+ESP32-C3 在当前实现中同时扮演：
 
 - 对电视：BLE HID Peripheral
 - 对原装遥控器：BLE Central
-- 对 iPhone / HomeKit：Wi-Fi HomeKit Accessory
+- 对 HomeKit：Wi-Fi HomeKit Accessory
 
 最终结构：
 
@@ -50,9 +54,9 @@
 
 ---
 
-# 为什么做这个项目
+# 项目目标
 
-荣耀智慧屏 X1 本身没有原生 Apple HomeKit / Apple TV Remote 支持。
+荣耀智慧屏 X1 本身没有原生 Apple HomeKit / Apple TV Remote 支持，也没有现成的 Home Assistant 本地控制集成。
 
 目标不是简单做一个“手机网页遥控器”，而是让它尽量表现得像一个真正的 HomeKit Television：
 
@@ -460,6 +464,58 @@ Power 按下时启动大约 8 秒的 transient wake advertisement。
 
 ---
 
+# Home Assistant
+
+当前仓库的控制层使用 HomeSpan，把电视暴露成 HomeKit Television。
+
+但真正困难的部分其实已经在 BLE 层解决了：
+
+- 荣耀智慧屏 BLE HID 身份模拟
+- Power / 方向键 / OK / Back / Home / Menu / Volume / Mute
+- 冷唤醒特殊广播
+- 电视 BLE 连接状态检测
+- 原装遥控器 BLE Central 中继
+- Bond / Security / NVS 持久化
+- ESP32 重启后的自动恢复
+
+因此接入 Home Assistant 不需要重新逆向电视协议，只需要增加一层控制接口即可。
+
+比较直接的方案包括：
+
+```text
+Home Assistant
+      ↓
+MQTT / HTTP / ESPHome Native API
+      ↓
+ESP32-C3
+      ↓
+现有 sendHonorKey() / wake / state 逻辑
+      ↓
+荣耀智慧屏 X1
+```
+
+推荐后续实现顺序：
+
+1. MQTT command topic
+2. MQTT state topic
+3. Home Assistant MQTT Device Discovery
+4. 将 HomeKit 与 Home Assistant 控制层同时保留
+
+例如可以暴露：
+
+```text
+honor_x1/power
+honor_x1/key
+honor_x1/volume
+honor_x1/state
+```
+
+这样 Home Assistant 可以直接创建 Remote / Media Player / Button / Switch 等实体。
+
+> 当前仓库尚未实现 Home Assistant 接口；这里只是说明现有 BLE bridge 架构已经具备扩展条件。
+
+---
+
 # HomeKit 映射
 
 HomeKit RemoteKey：
@@ -801,6 +857,7 @@ FlashMode=dio
 - BLE advertising reverse engineering
 - HID Report Map
 - Apple HomeKit
+- Home Assistant ready architecture
 - HomeSpan
 - Wi-Fi
 - GitHub Actions CI
