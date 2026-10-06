@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "config.h"
 #include "HomeSpan.h"
 #include <NimBLEDevice.h>
 #include "host/ble_store.h"
@@ -38,7 +39,7 @@ static bool remoteSecurityReady = false;
 static bool remoteDoConnect = false;
 static uint32_t remoteRetryAt = 0;
 static const NimBLEAdvertisedDevice *remoteAdv = nullptr;
-static NimBLEAddress remoteConnectAddr("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+static NimBLEAddress remoteConnectAddr(ORIGINAL_REMOTE_MAC, BLE_ADDR_PUBLIC);
 static NimBLEClient *remoteClient = nullptr;
 static NimBLERemoteCharacteristic *remoteReport1 = nullptr;
 static bool remoteBootOurSecValid = false;
@@ -136,10 +137,11 @@ static RemoteClientCallbacks remoteClientCallbacks;
 class RemoteScanCallbacks : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice *device) override {
     const std::string addr = device->getAddress().toString();
+    const NimBLEAddress configuredRemote(ORIGINAL_REMOTE_MAC, BLE_ADDR_PUBLIC);
     const bool targetAddr =
-        (addr == "18:70:3b:76:b8:45" || addr == "18:70:3B:76:B8:45");
+        !device->getAddress().isNull() && device->getAddress() == configuredRemote;
     const bool targetName =
-        device->haveName() && device->getName() == "HDRC-BV1";
+        device->haveName() && device->getName() == ORIGINAL_REMOTE_NAME;
 
     // A bonded HDRC-BV1 may advertise without Local Name during normal
     // reconnect/wake. Its fixed public address is the authoritative match.
@@ -157,7 +159,7 @@ class RemoteScanCallbacks : public NimBLEScanCallbacks {
     remoteAdv = device;
 
     if (device->getAddress().isNull()) {
-      remoteConnectAddr = NimBLEAddress("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+      remoteConnectAddr = NimBLEAddress(ORIGINAL_REMOTE_MAC, BLE_ADDR_PUBLIC);
     } else {
       remoteConnectAddr = device->getAddress();
     }
@@ -297,7 +299,7 @@ static void startOriginalRemoteScan() {
 
 static bool readRemoteSecurityStore(struct ble_store_value_sec *our,
                                     struct ble_store_value_sec *peer) {
-  const NimBLEAddress remote("18:70:3B:76:B8:45", BLE_ADDR_PUBLIC);
+  const NimBLEAddress remote(ORIGINAL_REMOTE_MAC, BLE_ADDR_PUBLIC);
 
   struct ble_store_key_sec key = {};
   key.peer_addr = *remote.getBase();
@@ -385,29 +387,21 @@ static void forcePersistRemoteSecurityIfChanged() {
 }
 
 static bool hasOriginalRemoteBond() {
-  const std::string remoteAddr = "18:70:3b:76:b8:45";
+  const NimBLEAddress remote(ORIGINAL_REMOTE_MAC, BLE_ADDR_PUBLIC);
   const int count = NimBLEDevice::getNumBonds();
 
   for (int i = 0; i < count; ++i) {
-    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
-    std::string addr = peer.toString();
-    if (addr == remoteAddr || addr == "18:70:3B:76:B8:45") {
-      return true;
-    }
+    if (NimBLEDevice::getBondedAddress(i) == remote) return true;
   }
   return false;
 }
 
 static bool hasTvBond() {
-  const std::string remoteAddr = "18:70:3b:76:b8:45";
+  const NimBLEAddress remote(ORIGINAL_REMOTE_MAC, BLE_ADDR_PUBLIC);
   const int count = NimBLEDevice::getNumBonds();
 
   for (int i = 0; i < count; ++i) {
-    NimBLEAddress peer = NimBLEDevice::getBondedAddress(i);
-    std::string addr = peer.toString();
-    if (addr != remoteAddr && addr != "18:70:3B:76:B8:45") {
-      return true;
-    }
+    if (NimBLEDevice::getBondedAddress(i) != remote) return true;
   }
   return false;
 }
@@ -424,7 +418,7 @@ static void configureBondedIdleAdvertising() {
   advData.setAppearance(0x03C1);
 
   NimBLEAdvertisementData scanData;
-  scanData.setName("HDRC-BV1");
+  scanData.setName(ORIGINAL_REMOTE_NAME);
 
   adv->stop();
   adv->setConnectableMode(BLE_GAP_CONN_MODE_UND);
@@ -622,7 +616,7 @@ static void sendHonorKey(uint8_t key) {
 }
 
 static void setupHonorBleKeyboard() {
-  NimBLEDevice::init("HDRC-BV1");
+  NimBLEDevice::init(ORIGINAL_REMOTE_NAME);
   NimBLEDevice::setPower(9);
 
   NimBLEDevice::setSecurityAuth(true, false, true);
