@@ -30,35 +30,7 @@ jobs:
         run: |
           python3 -c 'from pathlib import Path; p=Path.home()/"Arduino/libraries/HomeSpan/src/Span.h"; s=p.read_text(); s=s.replace("    REQ(VolumeSelector);      \\n    OPT(ConfiguredName);","    REQ(VolumeSelector);\\n    OPT(Mute);\\n    OPT(ConfiguredName);"); p.write_text(s)'
 
-      - name: Compile ESP32-C3
-        run: |
-          mkdir -p build artifacts
-          ./bin/arduino-cli compile \
-            --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs,CDCOnBoot=cdc" \
-            --output-dir build \
-            apple_remote_bridge
-
-          echo "Build output:"
-          find build -maxdepth 1 -type f -printf '%f\n' | sort
-
-          MERGED=$(find build -maxdepth 1 -type f -name '*.merged.bin' | head -n1)
-          if [ -z "$MERGED" ]; then
-            echo "No merged bin found"
-            exit 1
-          fi
-
-          cp "$MERGED" artifacts/honor-x1-apple-remote-bridge.factory.bin
-          cp build/*.bin artifacts/ || true
-
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: honor-x1-apple-remote-bridge
-          path: artifacts/
-          if-no-files-found: error
-
-
-      - name: Compile Relay Prototype
+      - name: Compile ESP32-C3 Relay
         run: |
           mkdir -p relay-build relay-artifacts
           ./bin/arduino-cli compile \
