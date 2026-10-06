@@ -1,4 +1,4 @@
-name: Build Apple Remote Bridge
+name: Build Honor X1 Smart Home Bridge
 
 on:
   workflow_dispatch:
@@ -25,12 +25,13 @@ jobs:
           ./bin/arduino-cli core install esp32:esp32@3.3.8 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           ./bin/arduino-cli lib install "HomeSpan@2.1.8"
           ./bin/arduino-cli lib install "NimBLE-Arduino@2.5.0"
+          ./bin/arduino-cli lib install "PubSubClient@2.8"
 
       - name: Enable Mute in HomeSpan TelevisionSpeaker
         run: |
           python3 -c 'from pathlib import Path; p=Path.home()/"Arduino/libraries/HomeSpan/src/Span.h"; s=p.read_text(); s=s.replace("    REQ(VolumeSelector);      \\n    OPT(ConfiguredName);","    REQ(VolumeSelector);\\n    OPT(Mute);\\n    OPT(ConfiguredName);"); p.write_text(s)'
 
-      - name: Compile ESP32-C3 Relay Firmware
+      - name: Compile ESP32-C3 Bridge Firmware
         run: |
           mkdir -p relay-build relay-artifacts
           ./bin/arduino-cli compile \
@@ -38,32 +39,32 @@ jobs:
             --output-dir relay-build \
             relay_bridge
 
-          echo "Relay build output:"
+          echo "Build output:"
           find relay-build -maxdepth 1 -type f -printf '%f\n' | sort
 
           RELAY_MERGED=$(find relay-build -maxdepth 1 -type f -name '*.merged.bin' | head -n1)
           if [ -z "$RELAY_MERGED" ]; then
-            echo "No relay merged bin found"
+            echo "No merged bin found"
             exit 1
           fi
 
-          cp "$RELAY_MERGED" relay-artifacts/honor-x1-relay-bridge.factory.bin
+          cp "$RELAY_MERGED" relay-artifacts/honor-x1-smart-home-bridge.factory.bin
 
           RELAY_APP=$(find relay-build -maxdepth 1 -type f -name '*.ino.bin' | head -n1)
           if [ -z "$RELAY_APP" ]; then
             RELAY_APP=$(find relay-build -maxdepth 1 -type f -name '*.bin' ! -name '*.bootloader.bin' ! -name '*.partitions.bin' ! -name '*.merged.bin' | head -n1)
           fi
           if [ -z "$RELAY_APP" ]; then
-            echo "No relay application bin found"
+            echo "No application bin found"
             exit 1
           fi
 
-          cp "$RELAY_APP" relay-artifacts/honor-x1-relay-bridge.update.bin
+          cp "$RELAY_APP" relay-artifacts/honor-x1-smart-home-bridge.update.bin
           cp relay-build/*.bin relay-artifacts/ || true
 
-      - name: Upload relay firmware
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: honor-x1-relay-bridge
+          name: honor-x1-smart-home-bridge
           path: relay-artifacts/
           if-no-files-found: error
