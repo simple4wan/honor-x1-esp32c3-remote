@@ -132,7 +132,7 @@ FlashMode=dio
 
 ---
 
-# 原装遥控器
+# 原装遥控器配置
 
 原装遥控器广播名称：
 
@@ -140,73 +140,169 @@ FlashMode=dio
 HDRC-BV1
 ```
 
-当前这只遥控器的 BLE Public Address：
+项目现在把原装遥控器身份集中放在：
 
 ```text
-18:70:3B:76:B8:45
+relay_bridge/config.h
 ```
 
-## 注意：当前代码写死了原装遥控器 MAC
-
-目前为了保证扫描和自动重连稳定，代码中直接使用了：
+默认内容：
 
 ```cpp
-18:70:3B:76:B8:45
+#define ORIGINAL_REMOTE_MAC "18:70:3B:76:B8:45"
+#define ORIGINAL_REMOTE_NAME "HDRC-BV1"
 ```
 
-也就是说：
+## 为什么需要配置 MAC
 
-> 当前仓库中的固件默认只会主动连接这只原装遥控器。
-
-这是刻意设计的，不是通用遥控器自动发现方案。
-
-原因是 HDRC-BV1 某些广播包里通过扫描 API 读到的地址可能是空地址：
+HDRC-BV1 某些广播场景下，通过扫描 API 读到的地址可能是：
 
 ```text
 00:00:00:00:00:00
 ```
 
-但设备本身实际使用固定 Public BLE Address。
+但实际连接、Bond 恢复和 NimBLE Security Store 都需要稳定的 BLE identity address。
 
-因此代码在扫描到名称为 `HDRC-BV1` 的目标后，如果扫描结果地址为空，会 fallback 到：
+因此代码会：
+
+1. 优先根据真实 BLE Public Address 识别遥控器
+2. 也允许根据 `HDRC-BV1` 名称识别目标广播
+3. 如果扫描结果地址为空，则 fallback 到 `ORIGINAL_REMOTE_MAC`
+4. Bond 检测、OUR_SEC / PEER_SEC 查询也统一使用该配置
+
+这样换遥控器时只需要改一处。
+
+---
+
+## 如何获取原装遥控器 BLE MAC
+
+需要的是：
+
+> **原装 HDRC-BV1 遥控器自己的 BLE Public Address**
+
+不是 ESP32 的 Wi-Fi MAC，也不是 ESP32 模拟给电视看的 BLE 地址。
+
+### 方法 1：Android + nRF Connect
+
+这是最方便的方法之一。
+
+1. Android 安装 nRF Connect
+2. 打开 Scanner
+3. 按一下荣耀原装遥控器按键；如果不容易出现，可长按 **Home + Menu** 让它进入更明显的配对广播状态
+4. 在扫描结果中找到：
+
+```text
+HDRC-BV1
+```
+
+5. 查看该设备的 Address
+
+格式类似：
 
 ```text
 18:70:3B:76:B8:45
 ```
 
-同时 Bond 检测、安全记录读取和重连也使用这个地址。
-
-## 如果换了另一只遥控器
-
-需要把代码中的：
+如果扫描工具同时显示 Address Type，优先确认它是：
 
 ```text
-18:70:3B:76:B8:45
+Public
 ```
 
-替换成新遥控器的 Public BLE Address。
-
-当前主要涉及：
-
-- `remoteConnectAddr`
-- `hasOriginalRemoteBond()`
-- BLE security store 查询
-- fallback connect address
-
-建议直接全局搜索：
-
-```text
-18:70:3B:76:B8:45
-```
-
-然后替换。
-
-后续也可以重构成统一常量，例如：
+然后修改：
 
 ```cpp
-static constexpr const char *ORIGINAL_REMOTE_MAC =
-    "18:70:3B:76:B8:45";
+#define ORIGINAL_REMOTE_MAC "你的遥控器MAC"
 ```
+
+> iPhone / iOS 通常不会向普通 BLE App 暴露真实设备 MAC，所以不推荐用 iPhone 查这个值。
+
+---
+
+### 方法 2：Linux / Raspberry Pi
+
+有蓝牙适配器的 Linux 可以直接使用：
+
+```bash
+bluetoothctl
+```
+
+然后：
+
+```text
+power on
+scan on
+```
+
+按一下遥控器按键，或者按 **Home + Menu**。
+
+找到类似：
+
+```text
+Device 18:70:3B:76:B8:45 HDRC-BV1
+```
+
+前面的地址就是需要填入 `config.h` 的 MAC。
+
+扫描结束：
+
+```text
+scan off
+quit
+```
+
+---
+
+### 方法 3：临时用 ESP32 扫描
+
+如果手边只有 ESP32，也可以临时跑一个 NimBLE Scanner，输出设备名称和地址。
+
+核心逻辑类似：
+
+```cpp
+void onResult(const NimBLEAdvertisedDevice *device) {
+  if (device->haveName() && device->getName() == "HDRC-BV1") {
+    Serial.printf("HDRC-BV1: %s type=%u RSSI=%d\n",
+                  device->getAddress().toString().c_str(),
+                  device->getAddressType(),
+                  device->getRSSI());
+  }
+}
+```
+
+然后：
+
+1. 打开 115200 串口
+2. 按遥控器按键或 Home + Menu
+3. 记录 `HDRC-BV1` 对应的 Public Address
+4. 写入 `relay_bridge/config.h`
+
+注意：本项目之所以保留 MAC fallback，就是因为某些扫描包在当前环境下可能出现 `00:00:00:00:00:00`。如果这一包拿不到地址，可以继续等另一种广播状态，或者使用 Android / Linux 工具确认。
+
+---
+
+## 更换遥控器
+
+如果换了一只新的 HDRC-BV1，只需要修改：
+
+```cpp
+// relay_bridge/config.h
+
+#define ORIGINAL_REMOTE_MAC "AA:BB:CC:DD:EE:FF"
+#define ORIGINAL_REMOTE_NAME "HDRC-BV1"
+```
+
+然后重新编译、刷写固件。
+
+由于新遥控器的安全密钥不同，建议：
+
+1. 修改 MAC 并重新编译
+2. 刷 `update.bin` 或 `factory.bin`
+3. 新遥控器按 **Home + Menu**
+4. 等 ESP32 与新遥控器完成 Bond
+5. 重启 ESP32 验证自动恢复
+
+如果 NVS 中仍然保留旧遥控器 Bond，必要时再清理旧 BLE Bond；正常情况下，首次换遥控器时重新配对即可。
 
 ---
 
