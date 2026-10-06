@@ -30,11 +30,11 @@ jobs:
         run: |
           python3 -c 'from pathlib import Path; p=Path.home()/"Arduino/libraries/HomeSpan/src/Span.h"; s=p.read_text(); s=s.replace("    REQ(VolumeSelector);      \\n    OPT(ConfiguredName);","    REQ(VolumeSelector);\\n    OPT(Mute);\\n    OPT(ConfiguredName);"); p.write_text(s)'
 
-      - name: Compile ESP32-C3 Relay
+      - name: Compile ESP32-C3 Relay Firmware
         run: |
           mkdir -p relay-build relay-artifacts
           ./bin/arduino-cli compile \
-            --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs,CDCOnBoot=cdc" \
+            --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs,CDCOnBoot=cdc,FlashMode=dio" \
             --output-dir relay-build \
             relay_bridge
 
@@ -66,46 +66,4 @@ jobs:
         with:
           name: honor-x1-relay-bridge
           path: relay-artifacts/
-          if-no-files-found: error
-
-
-      # LuatOS CORE-ESP32C3 "minimal" board uses the ESP32-C3 native USB port.
-      # Arduino-ESP32 3.3.8 does not ship a dedicated AirM2M board ID, so use
-      # the generic ESP32-C3 target with USB CDC enabled and DIO flash mode.
-      - name: Compile LuatOS CORE ESP32C3 USB
-        run: |
-          mkdir -p luatos-build luatos-artifacts
-          ./bin/arduino-cli compile \
-            --fqbn "esp32:esp32:esp32c3:PartitionScheme=min_spiffs,CDCOnBoot=cdc,FlashMode=dio" \
-            --output-dir luatos-build \
-            relay_bridge
-
-          echo "LuatOS CORE ESP32C3 build output:"
-          find luatos-build -maxdepth 1 -type f -printf '%f\n' | sort
-
-          LUATOS_MERGED=$(find luatos-build -maxdepth 1 -type f -name '*.merged.bin' | head -n1)
-          if [ -z "$LUATOS_MERGED" ]; then
-            echo "No LuatOS merged bin found"
-            exit 1
-          fi
-
-          cp "$LUATOS_MERGED" luatos-artifacts/honor-x1-relay-bridge-luatos-c3-usb.factory.bin
-
-          LUATOS_APP=$(find luatos-build -maxdepth 1 -type f -name '*.ino.bin' | head -n1)
-          if [ -z "$LUATOS_APP" ]; then
-            LUATOS_APP=$(find luatos-build -maxdepth 1 -type f -name '*.bin' ! -name '*.bootloader.bin' ! -name '*.partitions.bin' ! -name '*.merged.bin' | head -n1)
-          fi
-          if [ -z "$LUATOS_APP" ]; then
-            echo "No LuatOS application bin found"
-            exit 1
-          fi
-
-          cp "$LUATOS_APP" luatos-artifacts/honor-x1-relay-bridge-luatos-c3-usb.update.bin
-          cp luatos-build/*.bin luatos-artifacts/ || true
-
-      - name: Upload LuatOS CORE ESP32C3 USB firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: honor-x1-relay-bridge-luatos-c3-usb
-          path: luatos-artifacts/
           if-no-files-found: error
