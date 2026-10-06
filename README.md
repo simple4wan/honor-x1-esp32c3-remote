@@ -84,24 +84,20 @@ ESP32-C3 同时维护两条 BLE 链路。
 
 # 硬件
 
-当前主要开发平台：
+当前目标平台：
 
 - ESP32-C3
 - 4 MB Flash
 
-测试过：
+已测试：
 
 - ESP32-C3 Super Mini
 - LuatOS / 合宙 CORE ESP32-C3
 - LuatOS CORE ESP32-C3 minimal / Native USB
 
-最终更推荐：
+这些板子统一使用同一套 ESP32-C3 编译配置和同一份固件，不再区分专用 build。
 
-**LuatOS CORE ESP32-C3 Native USB 版本**
-
-原因主要是板子本身更适合长期使用，同时仍然保持 ESP32-C3 芯片和当前 BLE 行为不变。
-
-Native USB 版本 GPIO18 / GPIO19 会被 USB 占用，本项目不依赖这两个 GPIO。
+如果使用 Native USB，GPIO18 / GPIO19 会被 USB 占用；本项目不依赖这两个 GPIO。
 
 ---
 
@@ -116,19 +112,16 @@ Native USB 版本 GPIO18 / GPIO19 会被 USB 占用，本项目不依赖这两�
 | HomeSpan | 2.1.8 |
 | NimBLE-Arduino | 2.5.0 |
 
-GitHub Actions 使用：
+GitHub Actions 统一使用：
 
 ```text
 esp32:esp32:esp32c3
 PartitionScheme=min_spiffs
 CDCOnBoot=cdc
-```
-
-LuatOS CORE ESP32-C3 Native USB 额外使用：
-
-```text
 FlashMode=dio
 ```
+
+普通 ESP32-C3、ESP32-C3 Super Mini 和 LuatOS CORE ESP32-C3 使用同一套配置。
 
 ---
 
@@ -691,7 +684,9 @@ Password: homespan
 
 # 固件
 
-GitHub Actions 自动生成两类固件。
+GitHub Actions 只编译一次 `relay_bridge`，生成一套通用 ESP32-C3 固件。
+
+普通 ESP32-C3、ESP32-C3 Super Mini 和 LuatOS CORE ESP32-C3 共用下面这两个文件。
 
 ## Factory
 
@@ -747,32 +742,11 @@ honor-x1-relay-bridge.update.bin
 - BLE Bonds
 - NVS
 
----
-
-# LuatOS CORE ESP32-C3 Native USB
-
-GitHub Actions 还会生成：
+当前统一编译参数：
 
 ```text
-honor-x1-relay-bridge-luatos-c3-usb.factory.bin
-honor-x1-relay-bridge-luatos-c3-usb.update.bin
-```
-
-Factory：
-
-```text
-offset 0x0
-```
-
-Update：
-
-```text
-offset 0x10000
-```
-
-编译参数包含：
-
-```text
+esp32:esp32:esp32c3
+PartitionScheme=min_spiffs
 CDCOnBoot=cdc
 FlashMode=dio
 ```
@@ -799,9 +773,8 @@ FlashMode=dio
 
 # 已知限制
 
-- 当前原装遥控器 MAC 写死为：
-  - `18:70:3B:76:B8:45`
-- 更换遥控器需要修改源码
+- 原装遥控器 MAC 需要在 `relay_bridge/config.h` 中配置
+- 更换遥控器后需要更新 `ORIGINAL_REMOTE_MAC` 并重新编译
 - Voice Report 0x5A 音频没有转发
 - HomeKit Active 使用 BLE connection state 作为电视开关状态代理
 - HomeKit RemoteKey 本身没有可靠的长按语义，因此没有模拟长按
